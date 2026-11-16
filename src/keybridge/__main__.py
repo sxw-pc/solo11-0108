@@ -4,8 +4,9 @@ from .contract import compile_contract
 from .ingest import import_rows,import_target
 from .rules import plan,apply,rollback
 from .report import write
-from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision
-from .corrections import import_corrections,prepare_corrections,apply_corrections,correction_report
+from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision,audit_evidence
+from .corrections import (import_corrections,prepare_corrections,apply_corrections,correction_report,
+                          query_as_of,query_valid,query_recorded,correction_history,validate_history)
 from .store import connect
 from .cutover import _hash
 def demo(workdir=None):
@@ -40,11 +41,26 @@ def correction_demo(workdir=None):
     batch=import_corrections(db,pid,file);prepare_corrections(db,batch);status=apply_corrections(db,batch)
     audit,quality,_=audit_target(db,pid)
     return {'correction_batch':batch,'correction_status':status,'target_audit':audit,'target_status':quality,'db':str(db)}
+def bitemporal_demo(workdir=None):
+    root=Path(workdir or tempfile.mkdtemp(prefix='keybridge-bitemporal-'));root.mkdir(parents=True,exist_ok=True)
+    demo(root);db=root/'data.db';con=connect(db)
+    pid=con.execute('SELECT MAX(id) FROM migration_plan').fetchone()[0]
+    file=root/'late_correction.json';file.write_text(json.dumps([
+        {'table':'parent','old_key':'p1','expected_revision':0,'valid_from':'2026-02-05','recorded_at':'2026-02-12',
+         'after':{'id':'p1','code':'A','label':'approved'}}]),encoding='utf-8')
+    batch=import_corrections(db,pid,file);prepare_corrections(db,batch);status=apply_corrections(db,batch)
+    before=audit_target(db,pid,valid_cutoff='2026-02-08',recorded_cutoff='2026-02-08')[0]
+    after=audit_target(db,pid,valid_cutoff='2026-02-08',recorded_cutoff='2026-02-12')[0]
+    return {'correction_batch':batch,'correction_status':status,
+            'business_2026_02_08':query_valid(db,'parent','p1','2026-02-08')['fields'],
+            'known_2026_02_08':query_recorded(db,'parent','p1','2026-02-08')['fields'],
+            'audits':{'before_receipt':before,'after_receipt':after},'db':str(db)}
 def main():
     p=argparse.ArgumentParser(description='离线多表键映射迁移');s=p.add_subparsers(dest='cmd',required=True)
     d=s.add_parser('demo');d.add_argument('--workdir')
     dd=s.add_parser('demo-decisions');dd.add_argument('--workdir')
     dc=s.add_parser('demo-corrections');dc.add_argument('--workdir')
+    dbm=s.add_parser('demo-bitemporal');dbm.add_argument('--workdir')
     c=s.add_parser('contract');c.add_argument('file');c.add_argument('--db',required=True)
     i=s.add_parser('import');i.add_argument('table');i.add_argument('file');i.add_argument('--db',required=True)
     t=s.add_parser('target');t.add_argument('table');t.add_argument('file');t.add_argument('--db',required=True)
@@ -53,6 +69,8 @@ def main():
     b=s.add_parser('rollback');b.add_argument('--db',required=True);b.add_argument('--plan',type=int,required=True)
     r=s.add_parser('report');r.add_argument('--db',required=True);r.add_argument('--plan',type=int,required=True);r.add_argument('--out',required=True)
     au=s.add_parser('target-audit');au.add_argument('--db',required=True);au.add_argument('--plan',type=int,required=True)
+    au.add_argument('--valid-cutoff');au.add_argument('--recorded-cutoff')
+    au.add_argument('--business-at');au.add_argument('--recorded-by')
     cl=s.add_parser('client-contract');cl.add_argument('file');cl.add_argument('--db',required=True)
     ob=s.add_parser('lookup-observe');ob.add_argument('--db',required=True);ob.add_argument('--client',required=True);ob.add_argument('--plan',type=int,required=True);ob.add_argument('--sequence',type=int,required=True);ob.add_argument('--old-key',required=True);ob.add_argument('--new-key',required=True);ob.add_argument('--payload-sha',required=True)
     rg=s.add_parser('retirement-gate');rg.add_argument('--db',required=True);rg.add_argument('--audit',type=int,required=True)
@@ -60,17 +78,27 @@ def main():
     cp=s.add_parser('correction-prepare');cp.add_argument('--db',required=True);cp.add_argument('--batch',type=int,required=True)
     ca=s.add_parser('correction-apply');ca.add_argument('--db',required=True);ca.add_argument('--batch',type=int,required=True)
     cr=s.add_parser('correction-report');cr.add_argument('--db',required=True);cr.add_argument('--batch',type=int,required=True)
+    ch=s.add_parser('correction-history');ch.add_argument('--db',required=True);ch.add_argument('--table');ch.add_argument('--old-key')
+    qb=s.add_parser('query-business');qb.add_argument('table');qb.add_argument('old_key');qb.add_argument('--db',required=True);qb.add_argument('--as-of',required=True)
+    qk=s.add_parser('query-known');qk.add_argument('table');qk.add_argument('old_key');qk.add_argument('--db',required=True);qk.add_argument('--recorded-by',required=True)
+    qa=s.add_parser('query-as-of');qa.add_argument('table',nargs='?');qa.add_argument('old_key',nargs='?');qa.add_argument('--db',required=True)
+    qa.add_argument('--business-at');qa.add_argument('--recorded-by');qa.add_argument('--as-of')
+    qa.add_argument('--time-dimension',choices=['valid','recorded'])
+    vh=s.add_parser('correction-validate');vh.add_argument('--db',required=True);vh.add_argument('--table');vh.add_argument('--old-key')
+    ev=s.add_parser('audit-evidence');ev.add_argument('--db',required=True);ev.add_argument('--audit',type=int,required=True)
     x=p.parse_args()
     if x.cmd=='demo':print(demo(x.workdir))
     elif x.cmd=='demo-decisions':print(decision_demo(x.workdir))
     elif x.cmd=='demo-corrections':print(correction_demo(x.workdir))
+    elif x.cmd=='demo-bitemporal':print(bitemporal_demo(x.workdir))
     elif x.cmd=='contract':print(compile_contract(x.file,x.db))
     elif x.cmd=='import':print(import_rows(x.db,x.table,x.file))
     elif x.cmd=='target':print(import_target(x.db,x.table,x.file))
     elif x.cmd=='plan':print(plan(x.db))
     elif x.cmd=='apply':apply(x.db,x.plan)
     elif x.cmd=='rollback':rollback(x.db,x.plan)
-    elif x.cmd=='target-audit':print(audit_target(x.db,x.plan))
+    elif x.cmd=='target-audit':print(audit_target(x.db,x.plan,x.valid_cutoff,x.recorded_cutoff,x.business_at,x.recorded_by))
+    elif x.cmd=='audit-evidence':print(json.dumps(audit_evidence(x.db,x.audit),ensure_ascii=False,indent=2))
     elif x.cmd=='client-contract':print(configure_clients(x.db,x.file))
     elif x.cmd=='lookup-observe':print(observe_lookup(x.db,x.client,x.plan,x.sequence,x.old_key,x.new_key,x.payload_sha))
     elif x.cmd=='retirement-gate':print(retirement_decision(x.db,x.audit))
@@ -78,5 +106,12 @@ def main():
     elif x.cmd=='correction-prepare':print(prepare_corrections(x.db,x.batch))
     elif x.cmd=='correction-apply':print(apply_corrections(x.db,x.batch))
     elif x.cmd=='correction-report':print(json.dumps(correction_report(x.db,x.batch),ensure_ascii=False,indent=2))
+    elif x.cmd=='correction-history':print(json.dumps(correction_history(x.db,x.table,x.old_key),ensure_ascii=False,indent=2))
+    elif x.cmd=='query-business':print(json.dumps(query_valid(x.db,x.table,x.old_key,x.as_of),ensure_ascii=False,indent=2))
+    elif x.cmd=='query-known':print(json.dumps(query_recorded(x.db,x.table,x.old_key,x.recorded_by),ensure_ascii=False,indent=2))
+    elif x.cmd=='query-as-of':print(json.dumps(query_as_of(x.db,x.table,x.old_key,business_at=x.business_at,
+                                                           recorded_by=x.recorded_by,as_of=x.as_of,
+                                                           time_dimension=x.time_dimension),ensure_ascii=False,indent=2))
+    elif x.cmd=='correction-validate':print(validate_history(x.db,x.table,x.old_key))
     else:print(write(x.db,x.plan,x.out))
 if __name__=='__main__':main()
