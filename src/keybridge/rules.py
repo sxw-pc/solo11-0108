@@ -63,6 +63,30 @@ def apply(path,plan_id,fail_after=None):
 def rollback(path,plan_id):
     db=connect(path)
     with db:
+        p=db.execute('SELECT * FROM migration_plan WHERE id=?',(plan_id,)).fetchone()
+        if not p or p['status']!='applied':raise ValueError('plan_not_applied')
+        actions=json.loads(p['actions'])
+        steps=db.execute('SELECT table_name,new_key,action FROM apply_step WHERE plan_id=? ORDER BY id',(plan_id,)).fetchall()
+        if len(steps)!=len(actions) or any(tuple(step)!=(a['table'],a['new'],a['kind']) for step,a in zip(steps,actions)):
+            raise ValueError('apply_ledger_changed')
+        entries=db.execute('SELECT table_name,new_key FROM rollback_entry WHERE plan_id=?',(plan_id,)).fetchall()
+        owned={(r['table_name'],r['new_key']) for r in entries}
+        expected={(a['table'],a['new']) for a in actions if a['kind']=='insert'}
+        if owned!=expected or len(entries)!=len(expected):raise ValueError('rollback_ledger_changed')
+        for action in actions:
+            if action['kind']!='insert':continue
+            current=db.execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?',(action['table'],action['new'])).fetchone()
+            if not current or json.loads(current['payload'])!=action['payload']:
+                raise ValueError('rollback_conflict')
+        for contract in db.execute('SELECT name,refs FROM table_contract'):
+            for row in db.execute('SELECT new_key,payload FROM target_row WHERE table_name=?',(contract['name'],)):
+                if (contract['name'],row['new_key']) in owned:continue
+                payload=json.loads(row['payload'])
+                for ref in json.loads(contract['refs']):
+                    fields=ref['field'] if isinstance(ref['field'],list) else [ref['field']]
+                    field=fields[0] if len(fields)==1 else '__ref_'+ref['table']+'_new_key'
+                    if (ref['table'],str(payload.get(field))) in owned:
+                        raise ValueError('rollback_referenced_by_external_row')
         for r in db.execute('SELECT * FROM rollback_entry WHERE plan_id=? ORDER BY id DESC',(plan_id,)).fetchall():db.execute('DELETE FROM target_row WHERE table_name=? AND new_key=?',(r['table_name'],r['new_key']))
         db.execute('DELETE FROM apply_step WHERE plan_id=?',(plan_id,));db.execute('DELETE FROM rollback_entry WHERE plan_id=?',(plan_id,));db.execute("UPDATE migration_plan SET status='rolled_back' WHERE id=?",(plan_id,))
     db.close()

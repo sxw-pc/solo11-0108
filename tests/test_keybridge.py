@@ -40,6 +40,11 @@ def test_natural_collision(tmp_path):
 def test_orphan_reference(tmp_path):
     db=setup(tmp_path,children=[['c1','C','missing']]);_,status,actions=plan(db)
     assert status=='blocked' and len(actions)==1
+def test_import_requires_declared_reference_fields(tmp_path):
+    db=setup(tmp_path)
+    bad=csvfile(tmp_path,'bad_child.csv',['id','code'],[['c2','D']])
+    with pytest.raises(ValueError,match='missing_column'):import_rows(db,'child',bad)
+    assert connect(db).execute("SELECT COUNT(*) FROM source_row WHERE old_key='c2'").fetchone()[0]==0
 def test_apply_rollback_and_failure(tmp_path):
     db=setup(tmp_path);pid,status,actions=plan(db);assert status=='ready'
     before=digest_rows(connect(db),'target_row')
@@ -47,6 +52,30 @@ def test_apply_rollback_and_failure(tmp_path):
     assert digest_rows(connect(db),'target_row')==before
     apply(db,pid);assert connect(db).execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==2
     rollback(db,pid);assert digest_rows(connect(db),'target_row')==before
+def test_rollback_refuses_changed_owned_row_without_partial_delete(tmp_path):
+    db=setup(tmp_path);pid,_,actions=plan(db);apply(db,pid)
+    c=connect(db)
+    with c:c.execute('UPDATE target_row SET payload=? WHERE table_name=? AND new_key=?',
+                     ('{"external":"edited"}',actions[1]['table'],actions[1]['new']))
+    with pytest.raises(ValueError,match='rollback_conflict'):rollback(db,pid)
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==2
+    assert c.execute('SELECT status FROM migration_plan WHERE id=?',(pid,)).fetchone()[0]=='applied'
+def test_rollback_requires_complete_apply_ledger(tmp_path):
+    db=setup(tmp_path);pid,_,_=plan(db);apply(db,pid)
+    c=connect(db)
+    with c:c.execute('DELETE FROM rollback_entry WHERE id=(SELECT MAX(id) FROM rollback_entry)')
+    with pytest.raises(ValueError,match='rollback_ledger_changed'):rollback(db,pid)
+    assert connect(db).execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==2
+def test_rollback_blocks_external_child_of_owned_parent(tmp_path):
+    db=setup(tmp_path);pid,_,actions=plan(db);apply(db,pid)
+    parent=actions[0]['new'];c=connect(db)
+    with c:c.execute('INSERT INTO target_row VALUES (?,?,?)',
+                     ('child','EXT-1',json.dumps({'code':'external','parent_id':parent})))
+    with pytest.raises(ValueError,match='rollback_referenced_by_external_row'):rollback(db,pid)
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==3
+    assert c.execute('SELECT status FROM migration_plan WHERE id=?',(pid,)).fetchone()[0]=='applied'
 def test_stale_plan(tmp_path):
     db=setup(tmp_path);pid,_,_=plan(db)
     with connect(db) as conn:conn.execute('UPDATE source_row SET natural=? WHERE old_key=?',('different','p1'))
@@ -60,6 +89,14 @@ def test_target_natural_conflict(tmp_path):
     import_target(db,'parent',csvfile(tmp_path,'target.csv',['new_key','code'],[['external','A']]))
     assert plan(db)[1]=='blocked'
     assert connect(db).execute("SELECT COUNT(*) FROM issue WHERE code='natural_target_conflict'").fetchone()[0]==1
+def test_target_snapshot_conflict_preserves_original_row(tmp_path):
+    db=setup(tmp_path)
+    first=csvfile(tmp_path,'target1.csv',['new_key','code'],[['TARGET','A']])
+    changed=csvfile(tmp_path,'target2.csv',['new_key','code'],[['TARGET','B']])
+    import_target(db,'parent',first)
+    before=digest_rows(connect(db),'target_row')
+    with pytest.raises(ValueError,match='target_snapshot_conflict'):import_target(db,'parent',changed)
+    assert digest_rows(connect(db),'target_row')==before
 def test_composite_primary_and_reference(tmp_path):
     db=tmp_path/'x.db';p=tmp_path/'contract.json'
     p.write_text(json.dumps({'tables':[{'name':'parent','pk':['site','local'],'natural':['site','code']},
