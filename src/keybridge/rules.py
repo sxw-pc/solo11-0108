@@ -1,6 +1,6 @@
 import hashlib,json
 from .store import connect
-from .identity import allocate
+from .identity import allocate,decision_digest
 def digest_rows(db,table):
     rows=[tuple(x) for x in db.execute('SELECT * FROM '+table+' ORDER BY 1,2')]
     return hashlib.sha256(json.dumps(rows,default=str).encode()).hexdigest()
@@ -8,13 +8,17 @@ def plan(path):
     db=connect(path);actions=[]
     with db:
         db.execute('DELETE FROM issue');db.execute('DELETE FROM identity_map');db.execute('DELETE FROM reference_edge')
+        db.execute("DELETE FROM collision_group WHERE reason='natural_collision'")
         allocate(db)
+        emitted=set()
         contracts=[dict(x) for x in db.execute('SELECT * FROM table_contract ORDER BY position')]
         for c in contracts:
             for r in db.execute('SELECT * FROM source_row WHERE table_name=? ORDER BY old_key',(c['name'],)).fetchall():
                 mapped=db.execute('SELECT new_key FROM identity_map WHERE table_name=? AND old_key=?',(c['name'],r['old_key'])).fetchone()
                 if not mapped:continue
                 payload=json.loads(r['payload']);new=mapped['new_key']
+                if (c['name'],new) in emitted:continue
+                emitted.add((c['name'],new))
                 if '|' in c['pk']:payload['__new_key']=new
                 else:payload[c['pk']]=new
                 blocked=False
@@ -42,8 +46,9 @@ def plan(path):
                 else:kind='insert'
                 actions.append({'table':c['name'],'old':r['old_key'],'new':new,'payload':payload,'kind':kind})
         source_hash=digest_rows(db,'source_row');target_hash=digest_rows(db,'target_row')
-        status='blocked' if db.execute('SELECT 1 FROM issue LIMIT 1').fetchone() or db.execute('SELECT 1 FROM collision_group LIMIT 1').fetchone() else 'ready'
-        pid=db.execute('INSERT INTO migration_plan(source_hash,target_hash,status,actions) VALUES (?,?,?,?)',(source_hash,target_hash,status,json.dumps(actions,sort_keys=True))).lastrowid
+        blocked=db.execute('SELECT 1 FROM issue LIMIT 1').fetchone() or db.execute('SELECT 1 FROM collision_group WHERE resolution IS NULL LIMIT 1').fetchone()
+        status='blocked' if blocked else 'ready'
+        pid=db.execute('INSERT INTO migration_plan(source_hash,target_hash,decision_hash,status,actions) VALUES (?,?,?,?,?)',(source_hash,target_hash,decision_digest(db),status,json.dumps(actions,sort_keys=True))).lastrowid
     db.close();return pid,status,actions
 def apply(path,plan_id,fail_after=None):
     db=connect(path)
@@ -52,6 +57,7 @@ def apply(path,plan_id,fail_after=None):
             p=db.execute('SELECT * FROM migration_plan WHERE id=?',(plan_id,)).fetchone()
             if not p or p['status']!='ready':raise ValueError('plan_not_ready')
             if p['source_hash']!=digest_rows(db,'source_row') or p['target_hash']!=digest_rows(db,'target_row'):raise ValueError('stale_plan')
+            if p['decision_hash']!=decision_digest(db):raise ValueError('stale_decision')
             for n,a in enumerate(json.loads(p['actions']),1):
                 if a['kind']=='insert':
                     db.execute('INSERT INTO rollback_entry(plan_id,table_name,new_key) VALUES (?,?,?)',(plan_id,a['table'],a['new']))

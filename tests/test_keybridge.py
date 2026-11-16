@@ -1,6 +1,7 @@
 import csv,json
 import pytest
 from keybridge.contract import compile_contract
+from keybridge.identity import adjudicate
 from keybridge.ingest import import_rows,import_target
 from keybridge.rules import plan,apply,rollback,digest_rows
 from keybridge.store import connect
@@ -114,3 +115,145 @@ def test_plan_report_counts_and_stale_target(tmp_path):
     assert data['counts']['parent']['input']==1 and data['edges'][0]['parent_new']==actions[0]['new']
     import_target(db,'parent',csvfile(tmp_path,'target.csv',['new_key','code'],[['external','other']]))
     with pytest.raises(ValueError,match='stale_plan'):apply(db,pid)
+def collision_fixture(tmp):
+    return setup(tmp,parents=[['p1','A'],['p2',' a ']],children=[['c1','C','p1'],['c2','D','p2']])
+def test_merge_adjudication(tmp_path):
+    from keybridge.report import write
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    pid,status,actions=plan(db)
+    assert status=='ready'
+    parents=[a for a in actions if a['table']=='parent']
+    children=[a for a in actions if a['table']=='child']
+    assert len(parents)==1 and len(children)==2
+    merged=parents[0]['new']
+    assert all(c['payload']['parent_id']==merged for c in children)
+    c=connect(db)
+    assert c.execute("SELECT COUNT(*) FROM identity_map WHERE table_name='parent'").fetchone()[0]==2
+    assert c.execute("SELECT COUNT(DISTINCT new_key) FROM identity_map WHERE table_name='parent'").fetchone()[0]==1
+    assert c.execute("SELECT COUNT(*) FROM collision_group WHERE reason='natural_collision' AND resolution='merge'").fetchone()[0]==2
+    edges=c.execute('SELECT child_old,parent_old,parent_new FROM reference_edge ORDER BY child_old').fetchall()
+    assert [tuple(e) for e in edges]==[('c1','p1',merged),('c2','p2',merged)]
+    data=json.loads(write(db,pid,tmp_path/'report').read_text(encoding='utf-8'))
+    counts=data['counts']['parent']
+    assert counts['input']==2 and counts['insert']==1 and counts['merged']==1 and counts['blocked']==0 and counts['conserved']
+    assert data['counts']['child']['input']==2 and data['counts']['child']['insert']==2 and data['counts']['child']['conserved']
+    apply(db,pid)
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==3
+    assert c.execute("SELECT COUNT(*) FROM target_row WHERE table_name='parent'").fetchone()[0]==1
+def test_keep_adjudication(tmp_path):
+    from keybridge.report import write
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','keep','evidence: distinct legacy accounts',{'p1':{'id':'p1'},'p2':{'id':'p2'}})
+    pid,status,actions=plan(db)
+    assert status=='ready'
+    parents={a['old']:a['new'] for a in actions if a['table']=='parent'}
+    assert len(parents)==2 and parents['p1']!=parents['p2']
+    children={a['old']:a for a in actions if a['table']=='child'}
+    assert children['c1']['payload']['parent_id']==parents['p1']
+    assert children['c2']['payload']['parent_id']==parents['p2']
+    assert plan(db)[2]==actions
+    c=connect(db)
+    edges=c.execute('SELECT child_old,parent_new FROM reference_edge ORDER BY child_old').fetchall()
+    assert [tuple(e) for e in edges]==[('c1',parents['p1']),('c2',parents['p2'])]
+    assert c.execute("SELECT COUNT(*) FROM collision_group WHERE reason='natural_collision' AND resolution='keep'").fetchone()[0]==2
+    data=json.loads(write(db,pid,tmp_path/'report').read_text(encoding='utf-8'))
+    counts=data['counts']['parent']
+    assert counts['input']==2 and counts['insert']==2 and counts['merged']==0 and counts['blocked']==0 and counts['conserved']
+def test_collision_without_adjudication_blocked(tmp_path):
+    db=collision_fixture(tmp_path)
+    _,status,actions=plan(db)
+    assert status=='blocked'
+    c=connect(db)
+    assert c.execute("SELECT COUNT(*) FROM collision_group WHERE reason='natural_collision' AND resolution IS NULL").fetchone()[0]==2
+    assert c.execute("SELECT COUNT(*) FROM issue WHERE code='natural_collision'").fetchone()[0]==1
+    assert not any(a['table']=='parent' and a['old']=='p2' for a in actions)
+    assert not any(a['old']=='c2' for a in actions)
+def test_merge_blocked_by_target_natural_conflict(tmp_path):
+    db=collision_fixture(tmp_path)
+    import_target(db,'parent',csvfile(tmp_path,'t.csv',['new_key','code'],[['EXT-1','A']]))
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    _,status,actions=plan(db)
+    assert status=='blocked'
+    c=connect(db)
+    assert c.execute("SELECT COUNT(*) FROM issue WHERE code='natural_target_conflict'").fetchone()[0]==1
+    assert not any(a['table']=='parent' for a in actions)
+    row=c.execute("SELECT payload FROM target_row WHERE table_name='parent' AND new_key='EXT-1'").fetchone()[0]
+    assert row==json.dumps({'new_key':'EXT-1','code':'A'},sort_keys=True)
+def test_merge_payload_conflict_blocked(tmp_path):
+    db=tmp_path/'x.db';contract=tmp_path/'contract.json'
+    contract.write_text(json.dumps({'tables':[{'name':'parent','pk':'id','natural':'code'},{'name':'child','pk':'id','natural':'code','refs':[{'field':'parent_id','table':'parent'}]}]}),encoding='utf-8')
+    compile_contract(contract,db)
+    import_rows(db,'parent',csvfile(tmp_path,'p.csv',['id','code','site'],[['p1','A','x'],['p2',' a ','y']]))
+    import_rows(db,'child',csvfile(tmp_path,'c.csv',['id','code','parent_id'],[['c1','C','p1'],['c2','D','p2']]))
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    _,status,_=plan(db)
+    assert status=='blocked'
+    assert connect(db).execute("SELECT COUNT(*) FROM issue WHERE code='merge_payload_conflict'").fetchone()[0]==1
+def test_keep_missing_discriminator_blocks_reference_closure(tmp_path):
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','keep','evidence: distinct legacy accounts',{'p1':{'id':'p1'}})
+    _,status,actions=plan(db)
+    assert status=='blocked'
+    c=connect(db)
+    assert c.execute("SELECT COUNT(*) FROM issue WHERE code='missing_discriminator' AND subject='parent:p2'").fetchone()[0]==1
+    assert c.execute("SELECT COUNT(*) FROM issue WHERE code='orphan_reference' AND subject='child:c2'").fetchone()[0]==1
+    assert not any(a['old'] in ('p2','c2') for a in actions)
+def test_adjudication_stale_on_source_change(tmp_path):
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    c=connect(db)
+    with c:c.execute("UPDATE source_row SET payload=? WHERE table_name='parent' AND old_key='p2'",
+                     (json.dumps({'id':'p2','code':' a ','note':'changed'},sort_keys=True),))
+    _,status,_=plan(db)
+    assert status=='blocked'
+    assert connect(db).execute("SELECT COUNT(*) FROM issue WHERE code='adjudication_stale'").fetchone()[0]==1
+def test_adjudication_stale_on_target_change(tmp_path):
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    import_target(db,'parent',csvfile(tmp_path,'t.csv',['new_key','code'],[['EXT-1','Z']]))
+    _,status,_=plan(db)
+    assert status=='blocked'
+    assert connect(db).execute("SELECT COUNT(*) FROM issue WHERE code='adjudication_stale'").fetchone()[0]==1
+def test_adjudication_stale_on_contract_change(tmp_path):
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    c=connect(db)
+    with c:c.execute("UPDATE table_contract SET refs='[]' WHERE name='child'")
+    _,status,_=plan(db)
+    assert status=='blocked'
+    assert connect(db).execute("SELECT COUNT(*) FROM issue WHERE code='adjudication_stale'").fetchone()[0]==1
+def test_apply_rechecks_decision_digest(tmp_path):
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    pid,status,_=plan(db)
+    assert status=='ready'
+    c=connect(db)
+    with c:c.execute("UPDATE adjudication SET evidence='tampered'")
+    with pytest.raises(ValueError,match='stale_decision'):apply(db,pid)
+def test_merge_apply_rollback_external_reference_protection(tmp_path):
+    db=collision_fixture(tmp_path)
+    adjudicate(db,'parent','a','merge','evidence: same upstream customer record')
+    pid,status,actions=plan(db)
+    assert status=='ready'
+    before=digest_rows(connect(db),'target_row')
+    apply(db,pid)
+    merged=[a for a in actions if a['table']=='parent'][0]['new']
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==3
+    with c:c.execute('INSERT INTO target_row VALUES (?,?,?)',
+                     ('child','EXT-9',json.dumps({'code':'external','parent_id':merged})))
+    with pytest.raises(ValueError,match='rollback_referenced_by_external_row'):rollback(db,pid)
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==4
+    with c:c.execute("DELETE FROM target_row WHERE new_key='EXT-9'")
+    rollback(db,pid)
+    assert digest_rows(connect(db),'target_row')==before
+def test_adjudication_validation(tmp_path):
+    db=collision_fixture(tmp_path)
+    with pytest.raises(ValueError,match='invalid_decision'):adjudicate(db,'parent','a','split','evidence')
+    with pytest.raises(ValueError,match='missing_evidence'):adjudicate(db,'parent','a','merge','')
+    with pytest.raises(ValueError,match='unknown_collision_group'):adjudicate(db,'parent','zz','merge','evidence')
+    with pytest.raises(ValueError,match='unknown_discriminator_row'):adjudicate(db,'parent','a','keep','evidence',{'p9':{'id':'p9'}})
+    with pytest.raises(ValueError,match='discriminator_mismatch'):adjudicate(db,'parent','a','keep','evidence',{'p1':{'id':'nope'}})

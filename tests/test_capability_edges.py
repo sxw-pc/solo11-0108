@@ -47,5 +47,5 @@ def test_plan_is_stable_and_apply_records_steps(tmp_path):
 def test_report_count_conservation(tmp_path):
     db=setup(tmp_path);pid,_,_=plan(db)
     data=json.loads(write(db,pid,tmp_path/'r').read_text(encoding='utf-8'))
-    assert data['counts']['parent']=={'input':1,'insert':1,'reuse':0,'isolated':0}
+    assert data['counts']['parent']=={'input':1,'insert':1,'reuse':0,'merged':0,'blocked':0,'isolated':0,'conserved':True}
     assert data['sources'][0]['sha'] and (tmp_path/'r.md').exists()
