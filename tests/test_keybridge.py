@@ -2,7 +2,7 @@ import csv,json
 import pytest
 from keybridge.contract import compile_contract
 from keybridge.ingest import import_rows,import_target
-from keybridge.rules import plan,apply,rollback,digest_rows
+from keybridge.rules import plan,apply,rollback,resume,digest_rows
 from keybridge.store import connect
 def csvfile(tmp,name,header,rows):
     p=tmp/name
@@ -114,3 +114,138 @@ def test_plan_report_counts_and_stale_target(tmp_path):
     assert data['counts']['parent']['input']==1 and data['edges'][0]['parent_new']==actions[0]['new']
     import_target(db,'parent',csvfile(tmp_path,'target.csv',['new_key','code'],[['external','other']]))
     with pytest.raises(ValueError,match='stale_plan'):apply(db,pid)
+def crashed_checkpointed(db,pid,**kw):
+    with pytest.raises(RuntimeError,match='injected_failure'):apply(db,pid,mode='checkpointed',**kw)
+def status_of(db,pid):
+    return connect(db).execute('SELECT status FROM migration_plan WHERE id=?',(pid,)).fetchone()[0]
+def test_checkpointed_batch_failure_rolls_back_only_failed_batch(tmp_path):
+    db=setup(tmp_path);pid,status,actions=plan(db);assert status=='ready'
+    crashed_checkpointed(db,pid,fail_after=2)
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==1
+    assert c.execute('SELECT COUNT(*) FROM target_row WHERE table_name=?',('parent',)).fetchone()[0]==1
+    assert status_of(db,pid)=='applying'
+    assert tuple(c.execute('SELECT next_batch,total_batches FROM plan_cursor WHERE plan_id=?',(pid,)).fetchone())==(1,2)
+    assert c.execute('SELECT COUNT(*) FROM apply_batch WHERE plan_id=?',(pid,)).fetchone()[0]==1
+    assert resume(db,pid)=='applied'
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==2
+    assert status_of(db,pid)=='applied'
+def test_checkpointed_failure_inside_first_batch_commits_nothing(tmp_path):
+    db=setup(tmp_path,parents=[['p1','A'],['p2','B']],children=[['c1','C','p1']])
+    pid,_,_=plan(db);before=digest_rows(connect(db),'target_row')
+    crashed_checkpointed(db,pid,fail_after=1)
+    c=connect(db)
+    assert digest_rows(c,'target_row')==before
+    assert status_of(db,pid)=='ready'
+    assert c.execute('SELECT COUNT(*) FROM plan_cursor').fetchone()[0]==0
+    assert c.execute('SELECT COUNT(*) FROM apply_batch').fetchone()[0]==0
+    with pytest.raises(ValueError,match='not_checkpointed'):resume(db,pid)
+    apply(db,pid,mode='checkpointed')
+    assert connect(db).execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==3
+def test_checkpointed_crash_between_batches_report_and_resume(tmp_path):
+    from keybridge.report import write
+    db=setup(tmp_path);pid,_,actions=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    c=connect(db)
+    assert status_of(db,pid)=='applying'
+    parent=c.execute('SELECT payload FROM target_row WHERE table_name=?',('parent',)).fetchone()
+    assert parent and json.loads(parent['payload'])==actions[0]['payload']
+    assert c.execute('SELECT COUNT(*) FROM target_row WHERE table_name=?',('child',)).fetchone()[0]==0
+    data=json.loads(write(db,pid,tmp_path/'report').read_text(encoding='utf-8'))
+    assert data['progress']['complete'] is False
+    assert data['progress']['mode']=='checkpointed'
+    assert data['progress']['available_tables']==['parent']
+    assert data['progress']['pending_tables']==['child']
+    assert [b['status'] for b in data['progress']['batches']]==['committed','pending']
+    assert resume(db,pid)=='applied'
+    data=json.loads(write(db,pid,tmp_path/'report2').read_text(encoding='utf-8'))
+    assert data['progress']['complete'] is True and data['progress']['pending_tables']==[]
+def test_checkpointed_duplicate_resume_is_idempotent(tmp_path):
+    db=setup(tmp_path);pid,_,_=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    assert resume(db,pid)=='applied'
+    snap=digest_rows(connect(db),'target_row')
+    steps=connect(db).execute('SELECT COUNT(*) FROM apply_step WHERE plan_id=?',(pid,)).fetchone()[0]
+    assert resume(db,pid)=='applied'
+    c=connect(db)
+    assert digest_rows(c,'target_row')==snap
+    assert c.execute('SELECT COUNT(*) FROM apply_step WHERE plan_id=?',(pid,)).fetchone()[0]==steps
+    assert c.execute('SELECT COUNT(*) FROM apply_batch WHERE plan_id=?',(pid,)).fetchone()[0]==2
+    assert c.execute('SELECT COUNT(*) FROM rollback_entry WHERE plan_id=?',(pid,)).fetchone()[0]==2
+def test_resume_blocks_source_change(tmp_path):
+    db=setup(tmp_path);pid,_,_=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    with connect(db) as c:c.execute('UPDATE source_row SET natural=? WHERE old_key=?',('changed','p1'))
+    with pytest.raises(ValueError,match='stale_plan'):resume(db,pid)
+    assert status_of(db,pid)=='applying'
+def test_resume_blocks_contract_change(tmp_path):
+    db=setup(tmp_path);pid,_,_=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    with connect(db) as c:c.execute("UPDATE table_contract SET pk=? WHERE name=?",('id|extra','parent'))
+    with pytest.raises(ValueError,match='contract_changed'):resume(db,pid)
+    assert status_of(db,pid)=='applying'
+def test_resume_blocks_completed_row_change_without_overwrite(tmp_path):
+    db=setup(tmp_path);pid,_,actions=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    with connect(db) as c:c.execute('UPDATE target_row SET payload=? WHERE table_name=? AND new_key=?',
+                     ('{"external":"edited"}','parent',actions[0]['new']))
+    with pytest.raises(ValueError,match='resume_completed_changed'):resume(db,pid)
+    row=connect(db).execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?',('parent',actions[0]['new'])).fetchone()
+    assert json.loads(row['payload'])=={'external':'edited'}
+    assert status_of(db,pid)=='applying'
+def test_resume_blocks_pending_scope_change_without_overwrite(tmp_path):
+    db=setup(tmp_path);pid,_,actions=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    child_new=actions[1]['new']
+    with connect(db) as c:c.execute('INSERT INTO target_row VALUES (?,?,?)',('child',child_new,json.dumps({'code':'external'})))
+    with pytest.raises(ValueError,match='resume_scope_changed'):resume(db,pid)
+    row=connect(db).execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?',('child',child_new)).fetchone()
+    assert json.loads(row['payload'])=={'code':'external'}
+    assert status_of(db,pid)=='applying'
+def test_resume_blocks_ledger_tampering(tmp_path):
+    db=setup(tmp_path);pid,_,_=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    with connect(db) as c:c.execute('DELETE FROM rollback_entry WHERE plan_id=?',(pid,))
+    with pytest.raises(ValueError,match='rollback_ledger_changed'):resume(db,pid)
+    assert status_of(db,pid)=='applying'
+def test_checkpointed_prefix_rollback_restores_target_and_reopens_plan(tmp_path):
+    db=setup(tmp_path);pid,_,_=plan(db);before=digest_rows(connect(db),'target_row')
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    assert status_of(db,pid)=='applying'
+    rollback(db,pid)
+    c=connect(db)
+    assert digest_rows(c,'target_row')==before
+    assert status_of(db,pid)=='ready'
+    for table in ('plan_cursor','apply_batch','apply_step','rollback_entry'):
+        assert c.execute(f'SELECT COUNT(*) FROM {table} WHERE plan_id=?',(pid,)).fetchone()[0]==0
+    apply(db,pid)
+    assert connect(db).execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==2
+def test_checkpointed_prefix_rollback_respects_external_references(tmp_path):
+    db=setup(tmp_path);pid,_,actions=plan(db)
+    crashed_checkpointed(db,pid,fail_after_batch=1)
+    parent=actions[0]['new']
+    with connect(db) as c:c.execute('INSERT INTO target_row VALUES (?,?,?)',
+                     ('child','EXT-1',json.dumps({'code':'external','parent_id':parent})))
+    with pytest.raises(ValueError,match='rollback_referenced_by_external_row'):rollback(db,pid)
+    c=connect(db)
+    assert c.execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==2
+    assert status_of(db,pid)=='applying'
+    with connect(db) as c:c.execute("DELETE FROM target_row WHERE new_key='EXT-1'")
+    rollback(db,pid)
+    assert connect(db).execute('SELECT COUNT(*) FROM target_row').fetchone()[0]==0
+    assert status_of(db,pid)=='ready'
+def test_atomic_and_checkpointed_are_distinct_run_contracts(tmp_path):
+    da=tmp_path/'atomic';da.mkdir();db_a=setup(da)
+    dc=tmp_path/'checkpointed';dc.mkdir();db_c=setup(dc)
+    pid_a,_,_=plan(db_a);pid_c,_,_=plan(db_c)
+    before_a=digest_rows(connect(db_a),'target_row');before_c=digest_rows(connect(db_c),'target_row')
+    with pytest.raises(RuntimeError,match='injected_failure'):apply(db_a,pid_a,fail_after=1)
+    assert digest_rows(connect(db_a),'target_row')==before_a
+    assert status_of(db_a,pid_a)=='ready'
+    crashed_checkpointed(db_c,pid_c,fail_after_batch=1)
+    c=connect(db_c)
+    assert digest_rows(c,'target_row')!=before_c
+    assert c.execute('SELECT COUNT(*) FROM target_row WHERE table_name=?',('parent',)).fetchone()[0]==1
+    assert status_of(db_c,pid_c)=='applying'
+    with pytest.raises(ValueError,match='plan_not_ready'):apply(db_c,pid_c)

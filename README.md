@@ -6,6 +6,8 @@
 
 回滚前重新核对执行步骤、逆操作台账、计划拥有的目标行内容，以及外部目标行是否引用这些行。任一证据已变化时整次回滚拒绝，目标数据保持原样；不会为了恢复旧摘要而删除后来修改的业务数据。相关错误码为 `apply_ledger_changed`、`rollback_ledger_changed`、`rollback_conflict`、`rollback_referenced_by_external_row`。`pytest` 固定从本仓 `src` 导入源码。
 
+执行合同分 atomic 与 checkpointed 两种。atomic 是默认：全部动作在单个 SQLite 事务中写入，中途失败整体回滚，目标摘要完全复原。checkpointed 需显式选择（`apply --mode checkpointed`）：按拓扑安全的表边界分批，每批把目标写入、逆操作账本、apply_step、游标（plan_cursor）和动作摘要（apply_batch）放在同一事务提交。父表批已提交、子表批未执行时进程中断，计划状态为 applying，报告列明可用表与待执行表，业务方可先使用父表数据，但不会把部分迁移标记为完成。`resume` 对同一 plan_id 续跑：按批序号与动作摘要幂等跳过已提交批，并核对这些目标行、apply_step 与 rollback_entry 仍吻合；来源、契约、未执行范围或已完成行被外部修改时分别以 `stale_plan`、`contract_changed`、`resume_scope_changed`、`resume_completed_changed` 拒绝续跑，且不覆盖外部变化。对 applying 计划执行 `rollback` 会按逆依赖顺序回滚已提交前缀，验证计划归属与外部引用保护后状态回到 ready，可重新执行。
+
 来源导入先核对契约声明的主键、自然键和外键列，缺列或空键不会等到计划执行时才失败。已有目标快照同键异值时拒绝导入并保持原行，避免干跑与真实目标之间出现静默覆盖。计划的来源、目标摘要和回滚证据共同决定能否安全落地或撤销。
 
 迁移落地后的目标核对通过 `target-audit` 检查计划拥有的目标行与引用关系，逐项记录缺失、值分歧和断裂引用，形成 complete 或 divergent 结论。计划执行成功仅表示写入事务完成，不代表目标内容后续仍与映射和引用预期相符。

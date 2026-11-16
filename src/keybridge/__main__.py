@@ -2,7 +2,7 @@ import argparse,csv,json,tempfile
 from pathlib import Path
 from .contract import compile_contract
 from .ingest import import_rows,import_target
-from .rules import plan,apply,rollback
+from .rules import plan,apply,rollback,resume
 from .report import write
 from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision
 from .store import connect
@@ -38,7 +38,8 @@ def main():
     i=s.add_parser('import');i.add_argument('table');i.add_argument('file');i.add_argument('--db',required=True)
     t=s.add_parser('target');t.add_argument('table');t.add_argument('file');t.add_argument('--db',required=True)
     n=s.add_parser('plan');n.add_argument('--db',required=True)
-    a=s.add_parser('apply');a.add_argument('--db',required=True);a.add_argument('--plan',type=int,required=True)
+    a=s.add_parser('apply');a.add_argument('--db',required=True);a.add_argument('--plan',type=int,required=True);a.add_argument('--mode',default='atomic',choices=['atomic','checkpointed'])
+    rs=s.add_parser('resume');rs.add_argument('--db',required=True);rs.add_argument('--plan',type=int,required=True)
     b=s.add_parser('rollback');b.add_argument('--db',required=True);b.add_argument('--plan',type=int,required=True)
     r=s.add_parser('report');r.add_argument('--db',required=True);r.add_argument('--plan',type=int,required=True);r.add_argument('--out',required=True)
     au=s.add_parser('target-audit');au.add_argument('--db',required=True);au.add_argument('--plan',type=int,required=True)
@@ -52,7 +53,8 @@ def main():
     elif x.cmd=='import':print(import_rows(x.db,x.table,x.file))
     elif x.cmd=='target':print(import_target(x.db,x.table,x.file))
     elif x.cmd=='plan':print(plan(x.db))
-    elif x.cmd=='apply':apply(x.db,x.plan)
+    elif x.cmd=='apply':apply(x.db,x.plan,mode=x.mode)
+    elif x.cmd=='resume':print(resume(x.db,x.plan))
     elif x.cmd=='rollback':rollback(x.db,x.plan)
     elif x.cmd=='target-audit':print(audit_target(x.db,x.plan))
     elif x.cmd=='client-contract':print(configure_clients(x.db,x.file))
