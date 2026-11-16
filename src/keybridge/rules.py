@@ -1,6 +1,8 @@
 import hashlib,json
 from .store import connect
 from .identity import allocate
+from .ingest import (active_generation,ensure_generation,
+                     materialised_rows,publish_generation)
 def digest_rows(db,table):
     rows=[tuple(x) for x in db.execute('SELECT * FROM '+table+' ORDER BY 1,2')]
     return hashlib.sha256(json.dumps(rows,default=str).encode()).hexdigest()
@@ -8,6 +10,8 @@ def plan(path):
     db=connect(path);actions=[]
     with db:
         db.execute('DELETE FROM issue');db.execute('DELETE FROM identity_map');db.execute('DELETE FROM reference_edge')
+        generation_id=ensure_generation(db)
+        generation=active_generation(db)
         allocate(db)
         contracts=[dict(x) for x in db.execute('SELECT * FROM table_contract ORDER BY position')]
         for c in contracts:
@@ -43,14 +47,23 @@ def plan(path):
                 actions.append({'table':c['name'],'old':r['old_key'],'new':new,'payload':payload,'kind':kind})
         source_hash=digest_rows(db,'source_row');target_hash=digest_rows(db,'target_row')
         status='blocked' if db.execute('SELECT 1 FROM issue LIMIT 1').fetchone() or db.execute('SELECT 1 FROM collision_group LIMIT 1').fetchone() else 'ready'
-        pid=db.execute('INSERT INTO migration_plan(source_hash,target_hash,status,actions) VALUES (?,?,?,?)',(source_hash,target_hash,status,json.dumps(actions,sort_keys=True))).lastrowid
+        pid=db.execute('INSERT INTO migration_plan(source_hash,target_hash,target_generation_id,target_generation_digest,status,actions) VALUES (?,?,?,?,?,?)',
+                       (source_hash,target_hash,generation_id,generation['digest'],status,json.dumps(actions,sort_keys=True))).lastrowid
     db.close();return pid,status,actions
+def _bind_plan(db,p):
+    """Refuse work when a newer target generation has replaced the plan's snapshot."""
+    generation=active_generation(db)
+    if p['target_generation_id'] is not None:
+        if generation is None or generation['id']!=p['target_generation_id'] or generation['digest']!=p['target_generation_digest']:
+            raise ValueError('stale_plan')
+    return generation
 def apply(path,plan_id,fail_after=None):
     db=connect(path)
     try:
         with db:
             p=db.execute('SELECT * FROM migration_plan WHERE id=?',(plan_id,)).fetchone()
             if not p or p['status']!='ready':raise ValueError('plan_not_ready')
+            generation=_bind_plan(db,p)
             if p['source_hash']!=digest_rows(db,'source_row') or p['target_hash']!=digest_rows(db,'target_row'):raise ValueError('stale_plan')
             for n,a in enumerate(json.loads(p['actions']),1):
                 if a['kind']=='insert':
@@ -58,13 +71,18 @@ def apply(path,plan_id,fail_after=None):
                     db.execute('INSERT INTO target_row VALUES (?,?,?)',(a['table'],a['new'],json.dumps(a['payload'],sort_keys=True)))
                 db.execute('INSERT INTO apply_step(plan_id,table_name,new_key,action) VALUES (?,?,?,?)',(plan_id,a['table'],a['new'],a['kind']))
                 if fail_after==n:raise RuntimeError('injected_failure')
-            db.execute("UPDATE migration_plan SET status='applied' WHERE id=?",(plan_id,))
+            applied_generation,_=publish_generation(db,p['target_generation_id'],'apply',materialised_rows(db))
+            db.execute("UPDATE migration_plan SET status='applied',applied_generation_id=? WHERE id=?",(applied_generation,plan_id))
     finally:db.close()
 def rollback(path,plan_id):
     db=connect(path)
     with db:
         p=db.execute('SELECT * FROM migration_plan WHERE id=?',(plan_id,)).fetchone()
         if not p or p['status']!='applied':raise ValueError('plan_not_applied')
+        generation=active_generation(db)
+        if p['applied_generation_id'] is not None:
+            if generation is None or generation['id']!=p['applied_generation_id']:
+                raise ValueError('stale_target_generation')
         actions=json.loads(p['actions'])
         steps=db.execute('SELECT table_name,new_key,action FROM apply_step WHERE plan_id=? ORDER BY id',(plan_id,)).fetchall()
         if len(steps)!=len(actions) or any(tuple(step)!=(a['table'],a['new'],a['kind']) for step,a in zip(steps,actions)):
@@ -89,4 +107,6 @@ def rollback(path,plan_id):
                         raise ValueError('rollback_referenced_by_external_row')
         for r in db.execute('SELECT * FROM rollback_entry WHERE plan_id=? ORDER BY id DESC',(plan_id,)).fetchall():db.execute('DELETE FROM target_row WHERE table_name=? AND new_key=?',(r['table_name'],r['new_key']))
         db.execute('DELETE FROM apply_step WHERE plan_id=?',(plan_id,));db.execute('DELETE FROM rollback_entry WHERE plan_id=?',(plan_id,));db.execute("UPDATE migration_plan SET status='rolled_back' WHERE id=?",(plan_id,))
+        if p['applied_generation_id'] is not None:
+            publish_generation(db,p['applied_generation_id'],'rollback',materialised_rows(db))
     db.close()

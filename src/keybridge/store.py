@@ -10,21 +10,40 @@ CREATE TABLE IF NOT EXISTS identity_map(table_name TEXT,old_key TEXT,new_key TEX
 CREATE TABLE IF NOT EXISTS reference_edge(id INTEGER PRIMARY KEY,child_table TEXT,child_old TEXT,parent_table TEXT,parent_old TEXT,parent_new TEXT);
 CREATE TABLE IF NOT EXISTS collision_group(id INTEGER PRIMARY KEY,table_name TEXT,old_key TEXT,reason TEXT,source_id INTEGER);
 CREATE TABLE IF NOT EXISTS target_row(table_name TEXT,new_key TEXT,payload TEXT,PRIMARY KEY(table_name,new_key));
-CREATE TABLE IF NOT EXISTS migration_plan(id INTEGER PRIMARY KEY,source_hash TEXT,target_hash TEXT,status TEXT,actions TEXT);
+CREATE TABLE IF NOT EXISTS target_generation(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES target_generation(id),origin TEXT NOT NULL,mode TEXT,table_name TEXT,source_sha TEXT,contract_digest TEXT,digest TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS target_generation_row(generation_id INTEGER REFERENCES target_generation(id),table_name TEXT,new_key TEXT,payload TEXT,PRIMARY KEY(generation_id,table_name,new_key));
+CREATE TABLE IF NOT EXISTS target_generation_import(id INTEGER PRIMARY KEY,generation_id INTEGER REFERENCES target_generation(id),table_name TEXT NOT NULL,mode TEXT NOT NULL,source_sha TEXT NOT NULL,base_generation INTEGER,contract_digest TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS target_active(slot INTEGER PRIMARY KEY CHECK(slot=1),generation_id INTEGER NOT NULL REFERENCES target_generation(id));
+CREATE TABLE IF NOT EXISTS migration_plan(id INTEGER PRIMARY KEY,source_hash TEXT,target_hash TEXT,target_generation_id INTEGER,target_generation_digest TEXT,applied_generation_id INTEGER,status TEXT,actions TEXT);
 CREATE TABLE IF NOT EXISTS apply_step(id INTEGER PRIMARY KEY,plan_id INTEGER,table_name TEXT,new_key TEXT,action TEXT);
 CREATE TABLE IF NOT EXISTS rollback_entry(id INTEGER PRIMARY KEY,plan_id INTEGER,table_name TEXT,new_key TEXT,old_payload TEXT);
 CREATE TABLE IF NOT EXISTS issue(id INTEGER PRIMARY KEY,code TEXT,subject TEXT,detail TEXT);
-CREATE TABLE IF NOT EXISTS target_audit(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES migration_plan(id),status TEXT NOT NULL,source_digest TEXT NOT NULL,target_digest TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS target_audit(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES migration_plan(id),status TEXT NOT NULL,source_digest TEXT NOT NULL,target_digest TEXT NOT NULL,plan_generation_id INTEGER,target_generation_id INTEGER,generation_digest TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS target_audit_detail(audit_id INTEGER REFERENCES target_audit(id),table_name TEXT,new_key TEXT,code TEXT,expected TEXT,actual TEXT,PRIMARY KEY(audit_id,table_name,new_key));
 CREATE TABLE IF NOT EXISTS client_contract(id TEXT PRIMARY KEY,critical INTEGER NOT NULL,table_name TEXT NOT NULL,config_sha TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS lookup_observation(id INTEGER PRIMARY KEY,client_id TEXT REFERENCES client_contract(id),plan_id INTEGER REFERENCES migration_plan(id),sequence INTEGER NOT NULL,old_key TEXT NOT NULL,observed_new_key TEXT,observed_sha TEXT,UNIQUE(client_id,sequence));
-CREATE TABLE IF NOT EXISTS retirement_gate(id INTEGER PRIMARY KEY,audit_id INTEGER REFERENCES target_audit(id),status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS retirement_gate(id INTEGER PRIMARY KEY,audit_id INTEGER REFERENCES target_audit(id),generation_id INTEGER,generation_digest TEXT,status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS retirement_member(gate_id INTEGER REFERENCES retirement_gate(id),client_id TEXT REFERENCES client_contract(id),old_key TEXT,status TEXT,observation_id INTEGER REFERENCES lookup_observation(id),PRIMARY KEY(gate_id,client_id,old_key));
-CREATE TABLE IF NOT EXISTS correction_batch(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES migration_plan(id),source_sha TEXT UNIQUE NOT NULL,raw BLOB NOT NULL,status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS correction_batch(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES migration_plan(id),source_sha TEXT UNIQUE NOT NULL,raw BLOB NOT NULL,target_generation_id INTEGER,generation_digest TEXT,applied_generation_id INTEGER,status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS correction_item(id INTEGER PRIMARY KEY,batch_id INTEGER REFERENCES correction_batch(id),table_name TEXT NOT NULL,old_key TEXT NOT NULL,expected_revision INTEGER NOT NULL,after_source TEXT NOT NULL,status TEXT NOT NULL,reason TEXT,base_sha TEXT,target_sha TEXT,desired_target TEXT,merged_target TEXT,UNIQUE(batch_id,table_name,old_key));
-CREATE TABLE IF NOT EXISTS correction_head(table_name TEXT,old_key TEXT,revision INTEGER NOT NULL,source_payload TEXT NOT NULL,projected_payload TEXT NOT NULL,target_payload TEXT NOT NULL,updated_by INTEGER REFERENCES correction_item(id),PRIMARY KEY(table_name,old_key));
+CREATE TABLE IF NOT EXISTS correction_head(table_name TEXT,old_key TEXT,revision INTEGER NOT NULL,source_payload TEXT NOT NULL,projected_payload TEXT NOT NULL,target_payload TEXT NOT NULL,target_generation_id INTEGER,generation_digest TEXT,updated_by INTEGER REFERENCES correction_item(id),PRIMARY KEY(table_name,old_key));
 CREATE TABLE IF NOT EXISTS correction_conflict(item_id INTEGER REFERENCES correction_item(id),field TEXT,base TEXT,target TEXT,requested TEXT,PRIMARY KEY(item_id,field));
 """
+_MIGRATIONS={
+    'migration_plan':[('target_generation_id','INTEGER'),('target_generation_digest','TEXT'),('applied_generation_id','INTEGER')],
+    'target_audit':[('plan_generation_id','INTEGER'),('target_generation_id','INTEGER'),('generation_digest','TEXT')],
+    'retirement_gate':[('generation_id','INTEGER'),('generation_digest','TEXT')],
+    'correction_batch':[('target_generation_id','INTEGER'),('generation_digest','TEXT'),('applied_generation_id','INTEGER')],
+    'correction_head':[('target_generation_id','INTEGER'),('generation_digest','TEXT')],
+}
+def _migrate(db):
+    """Add generation columns to databases created before generations existed."""
+    for table,columns in _MIGRATIONS.items():
+        existing={row['name'] for row in db.execute('PRAGMA table_info('+table+')')}
+        for name,kind in columns:
+            if name not in existing:
+                db.execute('ALTER TABLE '+table+' ADD COLUMN '+name+' '+kind)
+    db.commit()
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True)
-    db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA);return db
+    db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA);_migrate(db);return db

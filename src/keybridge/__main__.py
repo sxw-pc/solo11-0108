@@ -1,7 +1,7 @@
 import argparse,csv,json,tempfile
 from pathlib import Path
 from .contract import compile_contract
-from .ingest import import_rows,import_target
+from .ingest import import_rows,import_target,import_target_generation
 from .rules import plan,apply,rollback
 from .report import write
 from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision
@@ -47,7 +47,8 @@ def main():
     dc=s.add_parser('demo-corrections');dc.add_argument('--workdir')
     c=s.add_parser('contract');c.add_argument('file');c.add_argument('--db',required=True)
     i=s.add_parser('import');i.add_argument('table');i.add_argument('file');i.add_argument('--db',required=True)
-    t=s.add_parser('target');t.add_argument('table');t.add_argument('file');t.add_argument('--db',required=True)
+    t=s.add_parser('target');t.add_argument('table');t.add_argument('file');t.add_argument('--db',required=True);t.add_argument('--mode',choices=['full_snapshot','delta','legacy'],default='legacy');t.add_argument('--base-generation',type=int)
+    tg=s.add_parser('target-generation');tg.add_argument('files',nargs='+',metavar='TABLE=FILE');tg.add_argument('--db',required=True);tg.add_argument('--mode',choices=['full_snapshot','delta'],default='full_snapshot');tg.add_argument('--base-generation',type=int)
     n=s.add_parser('plan');n.add_argument('--db',required=True)
     a=s.add_parser('apply');a.add_argument('--db',required=True);a.add_argument('--plan',type=int,required=True)
     b=s.add_parser('rollback');b.add_argument('--db',required=True);b.add_argument('--plan',type=int,required=True)
@@ -66,7 +67,12 @@ def main():
     elif x.cmd=='demo-corrections':print(correction_demo(x.workdir))
     elif x.cmd=='contract':print(compile_contract(x.file,x.db))
     elif x.cmd=='import':print(import_rows(x.db,x.table,x.file))
-    elif x.cmd=='target':print(import_target(x.db,x.table,x.file))
+    elif x.cmd=='target':print(import_target(x.db,x.table,x.file,x.mode,x.base_generation))
+    elif x.cmd=='target-generation':
+        files={}
+        for item in x.files:
+            table,path=item.split('=',1);files[table]=path
+        print(import_target_generation(x.db,files,x.mode,x.base_generation))
     elif x.cmd=='plan':print(plan(x.db))
     elif x.cmd=='apply':apply(x.db,x.plan)
     elif x.cmd=='rollback':rollback(x.db,x.plan)

@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .store import connect
 from .rules import digest_rows
+from .ingest import (active_generation, contract_digest, is_ancestor,
+                     materialised_rows, publish_generation)
 
 
 def _json(value):
@@ -70,7 +72,7 @@ def import_corrections(path, plan_id, file):
             if digest_rows(db, 'source_row') != plan['source_hash']:
                 raise ValueError('migration_source_changed')
             source_sha = hashlib.sha256(raw).hexdigest()
-            old = db.execute('SELECT id,plan_id FROM correction_batch WHERE source_sha=?', (source_sha,)).fetchone()
+            old = db.execute('SELECT id,plan_id,target_generation_id,generation_digest FROM correction_batch WHERE source_sha=?', (source_sha,)).fetchone()
             if old:
                 if old['plan_id'] != plan_id:
                     raise ValueError('correction_batch_plan_conflict')
@@ -82,8 +84,12 @@ def import_corrections(path, plan_id, file):
                     raise ValueError('invalid_correction_item')
                 seen.add(identity)
                 _initial(db, plan, *identity)
-            batch = db.execute("INSERT INTO correction_batch(plan_id,source_sha,raw,status) VALUES (?,?,?,'received')",
-                               (plan_id, source_sha, raw)).lastrowid
+            generation = active_generation(db)
+            batch = db.execute("INSERT INTO correction_batch(plan_id,source_sha,raw,target_generation_id,"
+                               "generation_digest,status) VALUES (?,?,?,?,?,'received')",
+                               (plan_id, source_sha, raw,
+                                generation['id'] if generation else None,
+                                generation['digest'] if generation else None)).lastrowid
             db.executemany("INSERT INTO correction_item(batch_id,table_name,old_key,expected_revision,after_source,status) VALUES (?,?,?,?,?,'received')",
                            [(batch, str(r['table']), str(r['old_key']), int(r['expected_revision']), _json(r['after'])) for r in rows])
             return batch
@@ -116,6 +122,28 @@ def _merge(base, target, desired):
     return merged, conflicts
 
 
+def _head(db, table, old_key, generation_id):
+    """Latest correction head visible from ``generation_id``'s ancestry."""
+    rows = db.execute('SELECT * FROM correction_head WHERE table_name=? AND old_key=? '
+                      'ORDER BY revision DESC', (table, old_key)).fetchall()
+    if not rows:
+        return None
+    if generation_id is None:
+        return rows[0]
+    for row in rows:
+        if row['target_generation_id'] is None or is_ancestor(db, row['target_generation_id'], generation_id):
+            return row
+    return None
+
+
+def _require_generation(db, batch):
+    active = active_generation(db)
+    active_id = active['id'] if active else None
+    if batch['target_generation_id'] is not None and batch['target_generation_id'] != active_id:
+        raise ValueError('stale_target_generation')
+    return active
+
+
 def prepare_corrections(path, batch_id):
     db = connect(path)
     try:
@@ -128,11 +156,11 @@ def prepare_corrections(path, batch_id):
                 raise ValueError('migration_not_applied')
             if digest_rows(db, 'source_row') != plan['source_hash']:
                 raise ValueError('migration_source_changed')
+            _require_generation(db, batch)
             results = []
             for item in db.execute('SELECT * FROM correction_item WHERE batch_id=? ORDER BY id', (batch_id,)).fetchall():
                 original, projected, new_key = _initial(db, plan, item['table_name'], item['old_key'])
-                head = db.execute('SELECT * FROM correction_head WHERE table_name=? AND old_key=?',
-                                  (item['table_name'], item['old_key'])).fetchone()
+                head = _head(db, item['table_name'], item['old_key'], batch['target_generation_id'])
                 revision = head['revision'] if head else 0
                 base = json.loads(head['projected_payload']) if head else projected
                 source = json.loads(head['source_payload']) if head else original
@@ -179,13 +207,13 @@ def apply_corrections(path, batch_id):
                 raise ValueError('migration_not_applied')
             if digest_rows(db, 'source_row') != plan['source_hash']:
                 raise ValueError('migration_source_changed')
+            _require_generation(db, batch)
             items = db.execute('SELECT * FROM correction_item WHERE batch_id=? ORDER BY id', (batch_id,)).fetchall()
             for item in items:
                 if item['status'] != 'ready':
                     continue
                 original, projected, new_key = _initial(db, plan, item['table_name'], item['old_key'])
-                head = db.execute('SELECT revision,projected_payload FROM correction_head WHERE table_name=? AND old_key=?',
-                                  (item['table_name'], item['old_key'])).fetchone()
+                head = _head(db, item['table_name'], item['old_key'], batch['target_generation_id'])
                 revision = head['revision'] if head else 0
                 base = json.loads(head['projected_payload']) if head else projected
                 target_row = db.execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?',
@@ -194,6 +222,7 @@ def apply_corrections(path, batch_id):
                 if revision != item['expected_revision'] or _sha(base) != item['base_sha'] or _sha(target) != item['target_sha']:
                     raise ValueError('prepared_correction_stale')
             applied = 0
+            applied_items = []
             for item in items:
                 if item['status'] != 'ready':
                     continue
@@ -201,12 +230,22 @@ def apply_corrections(path, batch_id):
                                      (item['table_name'], item['old_key'])).fetchone()['new_key']
                 db.execute('UPDATE target_row SET payload=? WHERE table_name=? AND new_key=?',
                            (item['merged_target'], item['table_name'], new_key))
-                db.execute('INSERT INTO correction_head(table_name,old_key,revision,source_payload,projected_payload,target_payload,updated_by) VALUES (?,?,?,?,?,?,?) '
-                           'ON CONFLICT(table_name,old_key) DO UPDATE SET revision=excluded.revision,source_payload=excluded.source_payload,projected_payload=excluded.projected_payload,target_payload=excluded.target_payload,updated_by=excluded.updated_by',
-                           (item['table_name'], item['old_key'], item['expected_revision'] + 1,
-                            item['after_source'], item['desired_target'], item['merged_target'], item['id']))
                 db.execute("UPDATE correction_item SET status='applied' WHERE id=?", (item['id'],))
+                applied_items.append(item)
                 applied += 1
+            if applied:
+                generation, generation_digest_value = publish_generation(
+                    db, batch['target_generation_id'], 'correction', materialised_rows(db),
+                    contract_digest_value=contract_digest(db))
+                db.execute('UPDATE correction_batch SET applied_generation_id=? WHERE id=?',
+                           (generation, batch_id))
+                for item in applied_items:
+                    db.execute('INSERT INTO correction_head(table_name,old_key,revision,source_payload,projected_payload,target_payload,target_generation_id,generation_digest,updated_by) '
+                               'VALUES (?,?,?,?,?,?,?,?,?) '
+                               'ON CONFLICT(table_name,old_key) DO UPDATE SET revision=excluded.revision,source_payload=excluded.source_payload,projected_payload=excluded.projected_payload,target_payload=excluded.target_payload,target_generation_id=excluded.target_generation_id,generation_digest=excluded.generation_digest,updated_by=excluded.updated_by',
+                               (item['table_name'], item['old_key'], item['expected_revision'] + 1,
+                                item['after_source'], item['desired_target'], item['merged_target'],
+                                generation, generation_digest_value, item['id']))
             status = 'applied' if applied == len(items) else 'partially_applied' if applied else 'blocked'
             db.execute('UPDATE correction_batch SET status=? WHERE id=?', (status, batch_id))
             return status
