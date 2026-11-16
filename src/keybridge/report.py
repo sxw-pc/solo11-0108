@@ -4,6 +4,7 @@ from .store import connect
 def write(path,plan_id,out):
     db=connect(path);p=dict(db.execute('SELECT * FROM migration_plan WHERE id=?',(plan_id,)).fetchone())
     data={'plan':{k:v for k,v in p.items() if k!='actions'},'actions':json.loads(p['actions']),
+          'groups':json.loads(p['groups']) if p.get('groups') else [],
           'issues':[dict(x) for x in db.execute('SELECT * FROM issue')],
           'collisions':[dict(x) for x in db.execute('SELECT * FROM collision_group')],
           'edges':[dict(x) for x in db.execute('SELECT * FROM reference_edge')],

@@ -27,14 +27,22 @@ def audit_target(path, plan_id):
                     details.append((action['table'],action['new'],'missing' if actual is None else 'payload_mismatch',
                                     json.dumps(action['payload'],sort_keys=True),json.dumps(actual,sort_keys=True)))
             mapped={(a['table'],a['new']) for a in actions}
-            for edge in db.execute('SELECT child_table,child_old,parent_table,parent_new FROM reference_edge'):
+            for edge in db.execute('SELECT child_table,child_old,parent_table,parent_new,field FROM reference_edge'):
                 parent=db.execute('SELECT 1 FROM target_row WHERE table_name=? AND new_key=?',
                                   (edge['parent_table'],edge['parent_new'])).fetchone()
+                child=db.execute('SELECT new_key FROM identity_map WHERE table_name=? AND old_key=?',
+                                 (edge['child_table'],edge['child_old'])).fetchone()
+                child_new=child['new_key'] if child else edge['child_old']
                 if not parent:
-                    child=db.execute('SELECT new_key FROM identity_map WHERE table_name=? AND old_key=?',
-                                     (edge['child_table'],edge['child_old'])).fetchone()
-                    details.append((edge['child_table'],child['new_key'] if child else edge['child_old'],
-                                    'broken_reference',edge['parent_new'],None))
+                    details.append((edge['child_table'],child_new,'broken_reference',edge['parent_new'],None))
+                    continue
+                row=db.execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?',
+                               (edge['child_table'],child_new)).fetchone()
+                if not row:continue
+                payload=json.loads(row['payload'])
+                if payload.get(edge['field'])!=edge['parent_new']:
+                    details.append((edge['child_table'],child_new,'reference_not_closed',
+                                    edge['parent_new'],json.dumps(payload,sort_keys=True)))
             if plan['status']!='applied':status='not_applied'
             elif plan['source_hash']!=digest_rows(db,'source_row'):status='source_changed'
             elif details:status='divergent'

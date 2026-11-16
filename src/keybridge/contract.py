@@ -1,13 +1,27 @@
 import hashlib,json
 from .store import connect
-from .timeline import topological
+from .timeline import scc_order,cyclic_component
 def digest(v):return hashlib.sha256(v.encode() if isinstance(v,str) else v).hexdigest()
 def compile_contract(path,db_path):
     raw=open(path,'rb').read();obj=json.loads(raw);tables=obj['tables'];names=[t['name'] for t in tables]
     if len(names)!=len(set(names)):raise ValueError('duplicate_table')
     graph={t['name']:{r['table'] for r in t.get('refs',[])} for t in tables}
     if any(p not in graph for parents in graph.values() for p in parents):raise ValueError('unknown_reference')
-    order=topological(graph)
+    by_name={t['name']:t for t in tables}
+    order=[]
+    for component in scc_order(graph):
+        if cyclic_component(component,graph):
+            members=set(component)
+            for name in component:
+                for ref in by_name[name].get('refs',[]):
+                    if ref['table'] not in members:continue
+                    for capability in ('deferrable','nullable'):
+                        if capability not in ref:
+                            # Without an explicit target capability the cycle
+                            # remains unordered and cannot be compiled.
+                            raise ValueError('reference_cycle: capability_undeclared')
+                        if not isinstance(ref[capability],bool):raise ValueError('invalid_capability')
+        order.extend(component)
     db=connect(db_path)
     with db:
         old=db.execute('SELECT sha FROM dataset WHERE id=?',(obj.get('id','demo'),)).fetchone()
