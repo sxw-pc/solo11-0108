@@ -23,9 +23,12 @@ def audit_target(path, plan_id):
                 row=db.execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?',
                                (action['table'],action['new'])).fetchone()
                 actual=json.loads(row['payload']) if row else None
-                if actual!=action['payload']:
+                head=db.execute('SELECT target_payload FROM correction_head WHERE table_name=? AND old_key=?',
+                                (action['table'],action['old'])).fetchone()
+                expected=json.loads(head['target_payload']) if head else action['payload']
+                if actual!=expected:
                     details.append((action['table'],action['new'],'missing' if actual is None else 'payload_mismatch',
-                                    json.dumps(action['payload'],sort_keys=True),json.dumps(actual,sort_keys=True)))
+                                    json.dumps(expected,sort_keys=True),json.dumps(actual,sort_keys=True)))
             mapped={(a['table'],a['new']) for a in actions}
             for edge in db.execute('SELECT child_table,child_old,parent_table,parent_new FROM reference_edge'):
                 parent=db.execute('SELECT 1 FROM target_row WHERE table_name=? AND new_key=?',

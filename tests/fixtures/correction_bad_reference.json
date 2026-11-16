@@ -1,0 +1,3 @@
+[
+  {"table":"child","old_key":"c1","expected_revision":0,"after":{"id":"c1","code":"C","parent_id":"absent","status":"verified"}}
+]

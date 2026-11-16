@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS client_contract(id TEXT PRIMARY KEY,critical INTEGER 
 CREATE TABLE IF NOT EXISTS lookup_observation(id INTEGER PRIMARY KEY,client_id TEXT REFERENCES client_contract(id),plan_id INTEGER REFERENCES migration_plan(id),sequence INTEGER NOT NULL,old_key TEXT NOT NULL,observed_new_key TEXT,observed_sha TEXT,UNIQUE(client_id,sequence));
 CREATE TABLE IF NOT EXISTS retirement_gate(id INTEGER PRIMARY KEY,audit_id INTEGER REFERENCES target_audit(id),status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS retirement_member(gate_id INTEGER REFERENCES retirement_gate(id),client_id TEXT REFERENCES client_contract(id),old_key TEXT,status TEXT,observation_id INTEGER REFERENCES lookup_observation(id),PRIMARY KEY(gate_id,client_id,old_key));
+CREATE TABLE IF NOT EXISTS correction_batch(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES migration_plan(id),source_sha TEXT UNIQUE NOT NULL,raw BLOB NOT NULL,status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS correction_item(id INTEGER PRIMARY KEY,batch_id INTEGER REFERENCES correction_batch(id),table_name TEXT NOT NULL,old_key TEXT NOT NULL,expected_revision INTEGER NOT NULL,after_source TEXT NOT NULL,status TEXT NOT NULL,reason TEXT,base_sha TEXT,target_sha TEXT,desired_target TEXT,merged_target TEXT,UNIQUE(batch_id,table_name,old_key));
+CREATE TABLE IF NOT EXISTS correction_head(table_name TEXT,old_key TEXT,revision INTEGER NOT NULL,source_payload TEXT NOT NULL,projected_payload TEXT NOT NULL,target_payload TEXT NOT NULL,updated_by INTEGER REFERENCES correction_item(id),PRIMARY KEY(table_name,old_key));
+CREATE TABLE IF NOT EXISTS correction_conflict(item_id INTEGER REFERENCES correction_item(id),field TEXT,base TEXT,target TEXT,requested TEXT,PRIMARY KEY(item_id,field));
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True)

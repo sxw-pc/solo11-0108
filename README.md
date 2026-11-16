@@ -11,3 +11,5 @@
 迁移落地后的目标核对通过 `target-audit` 检查计划拥有的目标行与引用关系，逐项记录缺失、值分歧和断裂引用，形成 complete 或 divergent 结论。计划执行成功仅表示写入事务完成，不代表目标内容后续仍与映射和引用预期相符。
 
 旧键退役通过 `client-contract`、`lookup-observe` 和 `retirement-gate` 决定。关键客户端必须实际观察到映射后的新键及目标载荷哈希，且目标核对仍有效，才能得到 retire_old_keys；否则为 retain_aliases。合同、观测和每次闸门成员证据持久保存。`demo-decisions` 演示完整链路；测试覆盖目标漂移、缺失观测、错误映射与重复序号冲突。
+
+迁移完成后的旧源更正由独立的 `correction-import` → `correction-prepare` → `correction-apply` 流程处理。输入是 JSON 数组，每项提供 `table`、`old_key`、`expected_revision` 和完整的旧源 `after` 行。系统保存原始批次、每行更正版本、目标投影及逐字段冲突。更正外键先经冻结的旧新键映射转换；主键和自然键不允许借更正流程变更。准备时以旧源当前版本、目标现值和更正后投影做三方合并：目标独立改动的字段被保留，同字段竞争进入冲突隔离，其他行仍可落地。应用前再次核对版本和目标内容，避免准备后目标变化造成静默覆盖。`correction-report` 展示批次与冲突，`demo-corrections` 可运行完整样例。已落地的更正会成为后续 `target-audit` 的预期目标；旧审计因目标摘要变化失效，须重新审计并重新取得客户端观测后才可退役旧键。

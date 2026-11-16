@@ -5,6 +5,7 @@ from .ingest import import_rows,import_target
 from .rules import plan,apply,rollback
 from .report import write
 from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision
+from .corrections import import_corrections,prepare_corrections,apply_corrections,correction_report
 from .store import connect
 from .cutover import _hash
 def demo(workdir=None):
@@ -30,10 +31,20 @@ def decision_demo(workdir=None):
     observe_lookup(db,'catalog',pid,1,mapping['old_key'],mapping['new_key'],_hash(payload))
     gate,retirement,_=retirement_decision(db,aid)
     return {'target_audit':aid,'target_status':status,'retirement_gate':gate,'retirement_status':retirement,'db':str(db)}
+def correction_demo(workdir=None):
+    root=Path(workdir or tempfile.mkdtemp(prefix='keybridge-correction-'));root.mkdir(parents=True,exist_ok=True)
+    demo(root);db=root/'data.db';con=connect(db)
+    pid=con.execute('SELECT MAX(id) FROM migration_plan').fetchone()[0]
+    file=root/'correction.json';file.write_text(json.dumps([
+        {'table':'parent','old_key':'p1','expected_revision':0,'after':{'id':'p1','code':'A','label':'reviewed'}}]),encoding='utf-8')
+    batch=import_corrections(db,pid,file);prepare_corrections(db,batch);status=apply_corrections(db,batch)
+    audit,quality,_=audit_target(db,pid)
+    return {'correction_batch':batch,'correction_status':status,'target_audit':audit,'target_status':quality,'db':str(db)}
 def main():
     p=argparse.ArgumentParser(description='离线多表键映射迁移');s=p.add_subparsers(dest='cmd',required=True)
     d=s.add_parser('demo');d.add_argument('--workdir')
     dd=s.add_parser('demo-decisions');dd.add_argument('--workdir')
+    dc=s.add_parser('demo-corrections');dc.add_argument('--workdir')
     c=s.add_parser('contract');c.add_argument('file');c.add_argument('--db',required=True)
     i=s.add_parser('import');i.add_argument('table');i.add_argument('file');i.add_argument('--db',required=True)
     t=s.add_parser('target');t.add_argument('table');t.add_argument('file');t.add_argument('--db',required=True)
@@ -45,9 +56,14 @@ def main():
     cl=s.add_parser('client-contract');cl.add_argument('file');cl.add_argument('--db',required=True)
     ob=s.add_parser('lookup-observe');ob.add_argument('--db',required=True);ob.add_argument('--client',required=True);ob.add_argument('--plan',type=int,required=True);ob.add_argument('--sequence',type=int,required=True);ob.add_argument('--old-key',required=True);ob.add_argument('--new-key',required=True);ob.add_argument('--payload-sha',required=True)
     rg=s.add_parser('retirement-gate');rg.add_argument('--db',required=True);rg.add_argument('--audit',type=int,required=True)
+    ci=s.add_parser('correction-import');ci.add_argument('file');ci.add_argument('--db',required=True);ci.add_argument('--plan',type=int,required=True)
+    cp=s.add_parser('correction-prepare');cp.add_argument('--db',required=True);cp.add_argument('--batch',type=int,required=True)
+    ca=s.add_parser('correction-apply');ca.add_argument('--db',required=True);ca.add_argument('--batch',type=int,required=True)
+    cr=s.add_parser('correction-report');cr.add_argument('--db',required=True);cr.add_argument('--batch',type=int,required=True)
     x=p.parse_args()
     if x.cmd=='demo':print(demo(x.workdir))
     elif x.cmd=='demo-decisions':print(decision_demo(x.workdir))
+    elif x.cmd=='demo-corrections':print(correction_demo(x.workdir))
     elif x.cmd=='contract':print(compile_contract(x.file,x.db))
     elif x.cmd=='import':print(import_rows(x.db,x.table,x.file))
     elif x.cmd=='target':print(import_target(x.db,x.table,x.file))
@@ -58,5 +74,9 @@ def main():
     elif x.cmd=='client-contract':print(configure_clients(x.db,x.file))
     elif x.cmd=='lookup-observe':print(observe_lookup(x.db,x.client,x.plan,x.sequence,x.old_key,x.new_key,x.payload_sha))
     elif x.cmd=='retirement-gate':print(retirement_decision(x.db,x.audit))
+    elif x.cmd=='correction-import':print(import_corrections(x.db,x.plan,x.file))
+    elif x.cmd=='correction-prepare':print(prepare_corrections(x.db,x.batch))
+    elif x.cmd=='correction-apply':print(apply_corrections(x.db,x.batch))
+    elif x.cmd=='correction-report':print(json.dumps(correction_report(x.db,x.batch),ensure_ascii=False,indent=2))
     else:print(write(x.db,x.plan,x.out))
 if __name__=='__main__':main()

@@ -1,0 +1,4 @@
+[
+  {"table":"parent","old_key":"p1","expected_revision":0,"after":{"id":"p1","code":"A","label":"reviewed"}},
+  {"table":"child","old_key":"c1","expected_revision":0,"after":{"id":"c1","code":"C","parent_id":"p1","status":"verified"}}
+]
