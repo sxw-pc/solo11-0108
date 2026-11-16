@@ -4,6 +4,9 @@ from .contract import compile_contract
 from .ingest import import_rows,import_target
 from .rules import plan,apply,rollback
 from .report import write
+from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision
+from .store import connect
+from .cutover import _hash
 def demo(workdir=None):
     root=Path(workdir or tempfile.mkdtemp(prefix='keybridge-'));root.mkdir(parents=True,exist_ok=True)
     contract=root/'contract.json';contract.write_text(json.dumps({'tables':[{'name':'parent','pk':'id','natural':'code'}, {'name':'child','pk':'id','natural':'code','refs':[{'field':'parent_id','table':'parent'}]}]}),encoding='utf-8')
@@ -15,9 +18,22 @@ def demo(workdir=None):
     pid,status,_=plan(db)
     if status=='ready':apply(db,pid)
     return write(db,pid,root/'report')
+def decision_demo(workdir=None):
+    root=Path(workdir or tempfile.mkdtemp(prefix='keybridge-decision-'));root.mkdir(parents=True,exist_ok=True)
+    demo(root);db=root/'data.db';con=connect(db)
+    pid=con.execute('SELECT MAX(id) FROM migration_plan').fetchone()[0]
+    aid,status,_=audit_target(db,pid)
+    clients=root/'clients.json';clients.write_text(json.dumps([{'id':'catalog','critical':True,'table':'parent'}]),encoding='utf-8')
+    configure_clients(db,clients)
+    mapping=con.execute("SELECT * FROM identity_map WHERE table_name='parent' ORDER BY old_key LIMIT 1").fetchone()
+    payload=json.loads(con.execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?',('parent',mapping['new_key'])).fetchone()[0])
+    observe_lookup(db,'catalog',pid,1,mapping['old_key'],mapping['new_key'],_hash(payload))
+    gate,retirement,_=retirement_decision(db,aid)
+    return {'target_audit':aid,'target_status':status,'retirement_gate':gate,'retirement_status':retirement,'db':str(db)}
 def main():
     p=argparse.ArgumentParser(description='离线多表键映射迁移');s=p.add_subparsers(dest='cmd',required=True)
     d=s.add_parser('demo');d.add_argument('--workdir')
+    dd=s.add_parser('demo-decisions');dd.add_argument('--workdir')
     c=s.add_parser('contract');c.add_argument('file');c.add_argument('--db',required=True)
     i=s.add_parser('import');i.add_argument('table');i.add_argument('file');i.add_argument('--db',required=True)
     t=s.add_parser('target');t.add_argument('table');t.add_argument('file');t.add_argument('--db',required=True)
@@ -25,13 +41,22 @@ def main():
     a=s.add_parser('apply');a.add_argument('--db',required=True);a.add_argument('--plan',type=int,required=True)
     b=s.add_parser('rollback');b.add_argument('--db',required=True);b.add_argument('--plan',type=int,required=True)
     r=s.add_parser('report');r.add_argument('--db',required=True);r.add_argument('--plan',type=int,required=True);r.add_argument('--out',required=True)
+    au=s.add_parser('target-audit');au.add_argument('--db',required=True);au.add_argument('--plan',type=int,required=True)
+    cl=s.add_parser('client-contract');cl.add_argument('file');cl.add_argument('--db',required=True)
+    ob=s.add_parser('lookup-observe');ob.add_argument('--db',required=True);ob.add_argument('--client',required=True);ob.add_argument('--plan',type=int,required=True);ob.add_argument('--sequence',type=int,required=True);ob.add_argument('--old-key',required=True);ob.add_argument('--new-key',required=True);ob.add_argument('--payload-sha',required=True)
+    rg=s.add_parser('retirement-gate');rg.add_argument('--db',required=True);rg.add_argument('--audit',type=int,required=True)
     x=p.parse_args()
     if x.cmd=='demo':print(demo(x.workdir))
+    elif x.cmd=='demo-decisions':print(decision_demo(x.workdir))
     elif x.cmd=='contract':print(compile_contract(x.file,x.db))
     elif x.cmd=='import':print(import_rows(x.db,x.table,x.file))
     elif x.cmd=='target':print(import_target(x.db,x.table,x.file))
     elif x.cmd=='plan':print(plan(x.db))
     elif x.cmd=='apply':apply(x.db,x.plan)
     elif x.cmd=='rollback':rollback(x.db,x.plan)
+    elif x.cmd=='target-audit':print(audit_target(x.db,x.plan))
+    elif x.cmd=='client-contract':print(configure_clients(x.db,x.file))
+    elif x.cmd=='lookup-observe':print(observe_lookup(x.db,x.client,x.plan,x.sequence,x.old_key,x.new_key,x.payload_sha))
+    elif x.cmd=='retirement-gate':print(retirement_decision(x.db,x.audit))
     else:print(write(x.db,x.plan,x.out))
 if __name__=='__main__':main()
