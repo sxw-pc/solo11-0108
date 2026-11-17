@@ -1,0 +1,16 @@
+{
+  "invoices": [
+    {"event_id":"invoice-1","id":"I1","party":"merchant-a","reference":"batch-7","currency":"CNY","amount":"100.00","at":"2026-11-01T09:00:00"},
+    {"event_id":"invoice-2","id":"I2","party":"merchant-a","reference":"batch-7","currency":"CNY","amount":"50.00","at":"2026-11-01T09:05:00"}
+  ],
+  "payments": [
+    {"event_id":"payment-1","id":"P1","party":"merchant-a","reference":"batch-7","currency":"CNY","amount":"120.00","at":"2026-11-02T10:00:00"},
+    {"event_id":"payment-2","id":"P2","party":"merchant-a","reference":"batch-7","currency":"CNY","amount":"30.00","at":"2026-11-03T10:00:00"}
+  ],
+  "allocations": [
+    {"event_id":"edge-1","payment_id":"P1","invoice_id":"I1","amount":"80.00"},
+    {"event_id":"edge-2","payment_id":"P1","invoice_id":"I2","amount":"40.00"},
+    {"event_id":"edge-3","payment_id":"P2","invoice_id":"I1","amount":"20.00"},
+    {"event_id":"edge-4","payment_id":"P2","invoice_id":"I2","amount":"10.00"}
+  ]
+}

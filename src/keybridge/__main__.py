@@ -12,6 +12,7 @@ from .auth_report import report as authorization_report
 from .archive import register_contract,import_candidates,plan_archive,import_replica,audit_archive,archive_report
 from .shards import create_manifest,ingest_shard,restore,shard_report
 from .quality import register_contract as quality_contract,import_batch as quality_import,evaluate as quality_evaluate,propose_repair as quality_propose,review_repair as quality_review,release as quality_release,quality_report
+from .settlement import import_file as settlement_import,evaluate as settlement_evaluate,report as settlement_report
 from .store import connect
 from .cutover import _hash
 def demo(workdir=None):
@@ -106,6 +107,10 @@ def main():
     qr=s.add_parser('quality-review');qr.add_argument('--db',required=True);qr.add_argument('--proposal',required=True);qr.add_argument('--reviewer',required=True);qr.add_argument('--decision',choices=['approve','reject'],required=True);qr.add_argument('--reason',required=True)
     ql=s.add_parser('quality-release');ql.add_argument('--db',required=True);ql.add_argument('--batch',type=int,required=True);ql.add_argument('--out')
     qrp=s.add_parser('quality-report');qrp.add_argument('--db',required=True)
+    se=s.add_parser('settlement-import');se.add_argument('file');se.add_argument('--db',required=True)
+    sv=s.add_parser('settlement-evaluate');sv.add_argument('--db',required=True)
+    srp=s.add_parser('settlement-report');srp.add_argument('--db',required=True)
+    sd=s.add_parser('demo-settlement');sd.add_argument('--workdir')
     x=p.parse_args()
     if x.cmd=='demo':print(demo(x.workdir))
     elif x.cmd=='demo-decisions':print(decision_demo(x.workdir))
@@ -147,5 +152,13 @@ def main():
     elif x.cmd=='quality-review':print(json.dumps(quality_review(x.db,x.proposal,x.reviewer,x.decision=='approve',x.reason),ensure_ascii=False,indent=2))
     elif x.cmd=='quality-release':print(json.dumps(quality_release(x.db,x.batch,x.out),ensure_ascii=False,indent=2))
     elif x.cmd=='quality-report':print(json.dumps(quality_report(x.db),ensure_ascii=False,indent=2))
+    elif x.cmd=='settlement-import':print(json.dumps(settlement_import(x.db,x.file),ensure_ascii=False,indent=2))
+    elif x.cmd=='settlement-evaluate':print(json.dumps(settlement_evaluate(x.db),ensure_ascii=False,indent=2))
+    elif x.cmd=='settlement-report':print(json.dumps(settlement_report(x.db),ensure_ascii=False,indent=2))
+    elif x.cmd=='demo-settlement':
+        root=Path(x.workdir or tempfile.mkdtemp(prefix='keybridge-settlement-'));root.mkdir(parents=True,exist_ok=True)
+        db=root/'settlement.sqlite';fixture=Path(__file__).resolve().parent.parent.parent/'tests'/'fixtures'/'settlement_ok.json'
+        settlement_import(db,fixture)
+        print(json.dumps({'db':str(db),'report':settlement_report(db)},ensure_ascii=False,indent=2))
     else:print(write(x.db,x.plan,x.out))
 if __name__=='__main__':main()

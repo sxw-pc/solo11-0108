@@ -21,3 +21,5 @@
 真实离线分片恢复见 [建仓需求补充 v4](docs/BUILD_REQUIREMENTS_V4_SHARDS.md)：对保留对象的实际字节做 2-of-3 XOR 分片，按独立故障域失去分片的场景重建对象、核对整对象 SHA-256，并记录 manifest 版次、冲突分片及每次恢复审计。完整副本回执与分片字节验证并行保留，二者结论不混用。
 
 迁移前来源质量隔离、独立修复复核与整批放行见 [建仓需求补充 v5](docs/BUILD_REQUIREMENTS_V5_QUALITY.md)。这条链路保存原始来源、逐行隔离原因和修复审批证据；整批质量通过后才导出 CSV 与 manifest 摘要。它独立于迁移后的旧源更正流程。
+
+多源回款对账与结算账本见 [建仓需求补充 v6](docs/BUILD_REQUIREMENTS_V6_SETTLEMENT.md)。`settlement-import` 保存账单、银行回款、分配凭证和迟到冲正，`settlement-evaluate` 重算当前版本，`settlement-report` 查询历史及分配边；`demo-settlement` 展示一笔回款拆给两笔应收、两笔回款共同覆盖同一应收。金额使用整数分；同额多解、跨主体错配和归属不明的拆分冲正进入争议。

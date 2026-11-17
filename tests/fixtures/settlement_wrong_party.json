@@ -1,0 +1,9 @@
+{
+  "invoices": [
+    {"event_id":"wrong-invoice-a","id":"WA","party":"party-a","reference":"R","currency":"CNY","amount":"100.00","at":"2026-11-01T09:00:00"},
+    {"event_id":"wrong-invoice-b","id":"WB","party":"party-b","reference":"R","currency":"CNY","amount":"50.00","at":"2026-11-01T09:00:00"}
+  ],
+  "payments": [
+    {"event_id":"wrong-payment","id":"WP","party":"party-a","reference":"R","currency":"CNY","amount":"150.00","at":"2026-11-02T09:00:00"}
+  ]
+}
