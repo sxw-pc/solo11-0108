@@ -6,7 +6,7 @@ import pytest
 from keybridge.__main__ import demo
 from keybridge.auth_report import report
 from keybridge.authorization import check_access,import_grants
-from keybridge.credentials import issue,verify
+from keybridge.access_tokens import issue,verify
 from keybridge.corrections import import_corrections,prepare_corrections,apply_corrections
 from keybridge.cutover import audit_target
 from keybridge.rules import rollback

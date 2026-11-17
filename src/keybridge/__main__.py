@@ -7,7 +7,7 @@ from .report import write
 from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision
 from .corrections import import_corrections,prepare_corrections,apply_corrections,correction_report
 from .authorization import import_grants,check_access
-from .credentials import issue as issue_credential,verify as verify_credential
+from .access_tokens import issue as issue_credential,verify as verify_credential
 from .auth_report import report as authorization_report
 from .store import connect
 from .cutover import _hash
