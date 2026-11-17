@@ -11,6 +11,7 @@ from .access_tokens import issue as issue_credential,verify as verify_credential
 from .auth_report import report as authorization_report
 from .archive import register_contract,import_candidates,plan_archive,import_replica,audit_archive,archive_report
 from .shards import create_manifest,ingest_shard,restore,shard_report
+from .quality import register_contract as quality_contract,import_batch as quality_import,evaluate as quality_evaluate,propose_repair as quality_propose,review_repair as quality_review,release as quality_release,quality_report
 from .store import connect
 from .cutover import _hash
 def demo(workdir=None):
@@ -98,6 +99,13 @@ def main():
     si=s.add_parser('shard-ingest');si.add_argument('--db',required=True);si.add_argument('--manifest',type=int,required=True);si.add_argument('--proof',required=True);si.add_argument('--index',type=int,required=True);si.add_argument('--domain',required=True);si.add_argument('file')
     sr=s.add_parser('shard-restore');sr.add_argument('--db',required=True);sr.add_argument('--manifest',type=int,required=True);sr.add_argument('--lost',action='append',default=[]);sr.add_argument('--out')
     ss=s.add_parser('shard-report');ss.add_argument('--db',required=True)
+    qc=s.add_parser('quality-contract');qc.add_argument('file');qc.add_argument('--db',required=True)
+    qi=s.add_parser('quality-import');qi.add_argument('file');qi.add_argument('--db',required=True);qi.add_argument('--contract',required=True)
+    qe=s.add_parser('quality-evaluate');qe.add_argument('--db',required=True);qe.add_argument('--batch',type=int,required=True)
+    qp=s.add_parser('quality-propose');qp.add_argument('file');qp.add_argument('--db',required=True)
+    qr=s.add_parser('quality-review');qr.add_argument('--db',required=True);qr.add_argument('--proposal',required=True);qr.add_argument('--reviewer',required=True);qr.add_argument('--decision',choices=['approve','reject'],required=True);qr.add_argument('--reason',required=True)
+    ql=s.add_parser('quality-release');ql.add_argument('--db',required=True);ql.add_argument('--batch',type=int,required=True);ql.add_argument('--out')
+    qrp=s.add_parser('quality-report');qrp.add_argument('--db',required=True)
     x=p.parse_args()
     if x.cmd=='demo':print(demo(x.workdir))
     elif x.cmd=='demo-decisions':print(decision_demo(x.workdir))
@@ -132,5 +140,12 @@ def main():
     elif x.cmd=='shard-ingest':print(json.dumps(ingest_shard(x.db,x.manifest,x.proof,x.index,x.domain,x.file),ensure_ascii=False))
     elif x.cmd=='shard-restore':print(json.dumps(restore(x.db,x.manifest,x.lost,x.out),ensure_ascii=False))
     elif x.cmd=='shard-report':print(json.dumps(shard_report(x.db),ensure_ascii=False,indent=2))
+    elif x.cmd=='quality-contract':print(quality_contract(x.db,x.file))
+    elif x.cmd=='quality-import':print(quality_import(x.db,x.contract,x.file))
+    elif x.cmd=='quality-evaluate':print(json.dumps(quality_evaluate(x.db,x.batch),ensure_ascii=False,indent=2))
+    elif x.cmd=='quality-propose':print(quality_propose(x.db,x.file))
+    elif x.cmd=='quality-review':print(json.dumps(quality_review(x.db,x.proposal,x.reviewer,x.decision=='approve',x.reason),ensure_ascii=False,indent=2))
+    elif x.cmd=='quality-release':print(json.dumps(quality_release(x.db,x.batch,x.out),ensure_ascii=False,indent=2))
+    elif x.cmd=='quality-report':print(json.dumps(quality_report(x.db),ensure_ascii=False,indent=2))
     else:print(write(x.db,x.plan,x.out))
 if __name__=='__main__':main()

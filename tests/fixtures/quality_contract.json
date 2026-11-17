@@ -1,0 +1,1 @@
+{"id":"quality-orders","table":"orders","identity_field":"id","required_fields":["id","code","amount"],"numeric_ranges":{"amount":[0,100]}}
