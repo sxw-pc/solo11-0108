@@ -17,3 +17,5 @@
 迁移后主体授权与凭证核验见 [建仓需求补充 v2](docs/BUILD_REQUIREMENTS_V2_AUTHORIZATION.md)。`auth-import` 把旧身份的授权/撤销版本入库，`access-check` 要求唯一键映射、已应用计划、当前完整目标审计和字段/用途授权；`credential-issue` 签发只存摘要的凭证，`credential-verify` 在撤销、目标更正或回滚后重新裁定。`auth-report` 输出证据但不输出 token，`demo-auth` 用合成数据演示允许→撤销的结果变化。真实认证和密钥托管不由本地模拟器承担。
 
 来源归档是独立工作流：`archive-contract`、`archive-candidates` 和 `archive-plan` 在法定保留、数据群覆盖与有限预算之间裁定哪些来源批次应留存；`archive-replica`、`archive-audit` 核实选中批次能否从不同保管域恢复。摘要冲突、域重复和候选版本变化分别产生争议、脆弱和旧计划失效结论，持久化记录可由 `archive-report` 查询。命令和反例见 [建仓需求补充 v3](docs/BUILD_REQUIREMENTS_V3_ARCHIVE.md)。
+
+真实离线分片恢复见 [建仓需求补充 v4](docs/BUILD_REQUIREMENTS_V4_SHARDS.md)：对保留对象的实际字节做 2-of-3 XOR 分片，按独立故障域失去分片的场景重建对象、核对整对象 SHA-256，并记录 manifest 版次、冲突分片及每次恢复审计。完整副本回执与分片字节验证并行保留，二者结论不混用。

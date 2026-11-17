@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS archive_plan_item(plan_id INTEGER REFERENCES archive_
 CREATE TABLE IF NOT EXISTS archive_replica_proof(id TEXT PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),candidate_id TEXT REFERENCES archive_candidate(id),domain TEXT NOT NULL,digest TEXT NOT NULL,source_sha TEXT NOT NULL,raw BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS archive_audit(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),status TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS archive_audit_item(audit_id INTEGER REFERENCES archive_audit(id),candidate_id TEXT REFERENCES archive_candidate(id),status TEXT NOT NULL,domains TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(audit_id,candidate_id));
+CREATE TABLE IF NOT EXISTS shard_manifest(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),candidate_id TEXT REFERENCES archive_candidate(id),revision INTEGER NOT NULL,object_sha TEXT NOT NULL,object_size INTEGER NOT NULL,part0_sha TEXT NOT NULL,part1_sha TEXT NOT NULL,parity_sha TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(plan_id,candidate_id,revision));
+CREATE TABLE IF NOT EXISTS shard_proof(id TEXT PRIMARY KEY,manifest_id INTEGER REFERENCES shard_manifest(id),part_index INTEGER NOT NULL,domain TEXT NOT NULL,sha TEXT NOT NULL,raw BLOB NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS shard_restore(id INTEGER PRIMARY KEY,manifest_id INTEGER REFERENCES shard_manifest(id),lost_domains TEXT NOT NULL,status TEXT NOT NULL,part_indexes TEXT NOT NULL,reconstructed_sha TEXT,reason TEXT NOT NULL,output_path TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True)
