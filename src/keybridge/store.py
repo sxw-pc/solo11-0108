@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS quality_batch(id INTEGER PRIMARY KEY,contract_id TEXT
 CREATE TABLE IF NOT EXISTS quality_item(batch_id INTEGER NOT NULL REFERENCES quality_batch(id),row_no INTEGER NOT NULL,source_id TEXT NOT NULL,original_json TEXT NOT NULL,current_json TEXT NOT NULL,current_sha TEXT NOT NULL,status TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(batch_id,row_no),UNIQUE(batch_id,source_id));
 CREATE TABLE IF NOT EXISTS quality_repair(id TEXT PRIMARY KEY,batch_id INTEGER NOT NULL,row_no INTEGER NOT NULL,expected_sha TEXT NOT NULL,patch_json TEXT NOT NULL,submitter TEXT NOT NULL,reviewer TEXT,status TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS quality_release(id INTEGER PRIMARY KEY,batch_id INTEGER NOT NULL REFERENCES quality_batch(id),status TEXT NOT NULL,accepted_count INTEGER NOT NULL,quarantined_count INTEGER NOT NULL,manifest_sha TEXT,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS attachment_object(sha TEXT PRIMARY KEY,size INTEGER NOT NULL,status TEXT NOT NULL,origin TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS attachment_manifest(id INTEGER PRIMARY KEY,table_name TEXT NOT NULL,old_key TEXT NOT NULL,field TEXT NOT NULL,path TEXT NOT NULL,sha TEXT NOT NULL,size INTEGER NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(table_name,old_key,field));
+CREATE TABLE IF NOT EXISTS attachment_ref(id INTEGER PRIMARY KEY,plan_id INTEGER NOT NULL,table_name TEXT NOT NULL,new_key TEXT NOT NULL,field TEXT NOT NULL,sha TEXT NOT NULL,UNIQUE(plan_id,table_name,new_key,field));
+CREATE TABLE IF NOT EXISTS attachment_journal(id INTEGER PRIMARY KEY,op TEXT NOT NULL,plan_id INTEGER,table_name TEXT,old_key TEXT,new_key TEXT,field TEXT,sha TEXT,size INTEGER,path TEXT,detail TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True)

@@ -3,6 +3,7 @@ from pathlib import Path
 from .contract import compile_contract
 from .ingest import import_rows,import_target
 from .rules import plan,apply,rollback
+from .attachments import import_manifest,recover as recover_attachments,attachment_report
 from .report import write
 from .cutover import audit_target,configure_clients,observe_lookup,retirement_decision
 from .corrections import import_corrections,prepare_corrections,apply_corrections,correction_report
@@ -77,8 +78,11 @@ def main():
     i=s.add_parser('import');i.add_argument('table');i.add_argument('file');i.add_argument('--db',required=True)
     t=s.add_parser('target');t.add_argument('table');t.add_argument('file');t.add_argument('--db',required=True)
     n=s.add_parser('plan');n.add_argument('--db',required=True)
-    a=s.add_parser('apply');a.add_argument('--db',required=True);a.add_argument('--plan',type=int,required=True)
+    a=s.add_parser('apply');a.add_argument('--db',required=True);a.add_argument('--plan',type=int,required=True);a.add_argument('--cas')
     b=s.add_parser('rollback');b.add_argument('--db',required=True);b.add_argument('--plan',type=int,required=True)
+    ai=s.add_parser('attachment-import');ai.add_argument('file');ai.add_argument('--db',required=True);ai.add_argument('--cas')
+    rc=s.add_parser('recover');rc.add_argument('--db',required=True);rc.add_argument('--cas')
+    ao=s.add_parser('attachment-report');ao.add_argument('--db',required=True);ao.add_argument('--cas');ao.add_argument('--verify',action='store_true')
     r=s.add_parser('report');r.add_argument('--db',required=True);r.add_argument('--plan',type=int,required=True);r.add_argument('--out',required=True)
     au=s.add_parser('target-audit');au.add_argument('--db',required=True);au.add_argument('--plan',type=int,required=True)
     cl=s.add_parser('client-contract');cl.add_argument('file');cl.add_argument('--db',required=True)
@@ -127,8 +131,11 @@ def main():
     elif x.cmd=='import':print(import_rows(x.db,x.table,x.file))
     elif x.cmd=='target':print(import_target(x.db,x.table,x.file))
     elif x.cmd=='plan':print(plan(x.db))
-    elif x.cmd=='apply':apply(x.db,x.plan)
+    elif x.cmd=='apply':apply(x.db,x.plan,cas_dir=x.cas)
     elif x.cmd=='rollback':rollback(x.db,x.plan)
+    elif x.cmd=='attachment-import':print(json.dumps(import_manifest(x.db,x.file,x.cas),ensure_ascii=False))
+    elif x.cmd=='recover':print(json.dumps(recover_attachments(x.db,x.cas),ensure_ascii=False))
+    elif x.cmd=='attachment-report':print(json.dumps(attachment_report(x.db,x.cas,x.verify),ensure_ascii=False,indent=2))
     elif x.cmd=='target-audit':print(audit_target(x.db,x.plan))
     elif x.cmd=='client-contract':print(configure_clients(x.db,x.file))
     elif x.cmd=='lookup-observe':print(observe_lookup(x.db,x.client,x.plan,x.sequence,x.old_key,x.new_key,x.payload_sha))
