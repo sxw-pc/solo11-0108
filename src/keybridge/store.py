@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS quality_batch(id INTEGER PRIMARY KEY,contract_id TEXT
 CREATE TABLE IF NOT EXISTS quality_item(batch_id INTEGER NOT NULL REFERENCES quality_batch(id),row_no INTEGER NOT NULL,source_id TEXT NOT NULL,original_json TEXT NOT NULL,current_json TEXT NOT NULL,current_sha TEXT NOT NULL,status TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(batch_id,row_no),UNIQUE(batch_id,source_id));
 CREATE TABLE IF NOT EXISTS quality_repair(id TEXT PRIMARY KEY,batch_id INTEGER NOT NULL,row_no INTEGER NOT NULL,expected_sha TEXT NOT NULL,patch_json TEXT NOT NULL,submitter TEXT NOT NULL,reviewer TEXT,status TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS quality_release(id INTEGER PRIMARY KEY,batch_id INTEGER NOT NULL REFERENCES quality_batch(id),status TEXT NOT NULL,accepted_count INTEGER NOT NULL,quarantined_count INTEGER NOT NULL,manifest_sha TEXT,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS table_sensitive(table_name TEXT NOT NULL,field TEXT NOT NULL,PRIMARY KEY(table_name,field));
+CREATE TABLE IF NOT EXISTS erasure_request(id INTEGER PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,table_name TEXT NOT NULL,old_key TEXT NOT NULL,scope TEXT NOT NULL,fields TEXT NOT NULL,entities TEXT NOT NULL,original_artifact_sha TEXT NOT NULL,erased_artifact_sha TEXT NOT NULL,affected_rows INTEGER NOT NULL,receipt TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS erasure_guard(table_name TEXT NOT NULL,old_key TEXT NOT NULL,new_key TEXT,field TEXT NOT NULL,request_id TEXT NOT NULL,PRIMARY KEY(table_name,old_key,field));
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True)

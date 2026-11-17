@@ -76,11 +76,21 @@ def import_corrections(path, plan_id, file):
                     raise ValueError('correction_batch_plan_conflict')
                 return old['id']
             seen = set()
+            guards = {}
+            for guard in db.execute('SELECT table_name,old_key,field FROM erasure_guard'):
+                guards.setdefault((guard['table_name'], guard['old_key']), set()).add(guard['field'])
             for row in rows:
                 identity = (str(row['table']), str(row['old_key']))
                 if identity in seen or not isinstance(row.get('after'), dict) or int(row['expected_revision']) < 0:
                     raise ValueError('invalid_correction_item')
                 seen.add(identity)
+                erased = guards.get(identity)
+                if erased:
+                    if '*' in erased:
+                        raise ValueError('erased_entity_reimport')
+                    if any(field in erased and row['after'].get(field) is not None and str(row['after'][field]).strip()
+                           for field in erased):
+                        raise ValueError('erased_field_reimport')
                 _initial(db, plan, *identity)
             batch = db.execute("INSERT INTO correction_batch(plan_id,source_sha,raw,status) VALUES (?,?,?,'received')",
                                (plan_id, source_sha, raw)).lastrowid

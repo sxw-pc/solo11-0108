@@ -38,7 +38,8 @@ def audit_target(path, plan_id):
                                      (edge['child_table'],edge['child_old'])).fetchone()
                     details.append((edge['child_table'],child['new_key'] if child else edge['child_old'],
                                     'broken_reference',edge['parent_new'],None))
-            if plan['status']!='applied':status='not_applied'
+            if plan['status']=='sealed':status='sealed'
+            elif plan['status']!='applied':status='not_applied'
             elif plan['source_hash']!=digest_rows(db,'source_row'):status='source_changed'
             elif details:status='divergent'
             else:status='complete'

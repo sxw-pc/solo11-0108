@@ -157,3 +157,175 @@ def test_correction_requires_fresh_client_observation_before_key_retirement(tmp_
     after = target(db, 'parent')[1]
     observe_lookup(db, 'catalog', plan, 2, mapping['old_key'], mapping['new_key'], _hash(after))
     assert retirement_decision(db, new_audit)[1] == 'retire_old_keys'
+
+
+# --- irreversible erasure interacts with corrections and retirement ---------
+from keybridge.rules import erase
+
+
+def _csv(tmp, name, header, rows):
+    p = tmp / name
+    with p.open('w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f); w.writerow(header); w.writerows(rows)
+    return p
+
+
+def erasure_db(tmp_path):
+    contract = tmp_path / 'contract.json'
+    contract.write_text(json.dumps({'tables': [
+        {'name': 'parent', 'pk': 'id', 'natural': 'code', 'sensitive': ['email']},
+        {'name': 'child', 'pk': 'id', 'natural': 'code', 'refs': [{'field': 'parent_id', 'table': 'parent'}]}
+    ]}), encoding='utf-8')
+    db = tmp_path / 'erase.db'
+    compile_contract(contract, db)
+    import_rows(db, 'parent', _csv(tmp_path, 'parents.csv', ['id', 'code', 'email', 'region'],
+                                   [['p1', 'A', 'p1@example.test', 'north'], ['p2', 'B', 'p2@example.test', 'south']]))
+    import_rows(db, 'child', _csv(tmp_path, 'children.csv', ['id', 'code', 'parent_id', 'phone'],
+                                  [['c1', 'CA', 'p1', '111'], ['c2', 'CB', 'p1', '222'], ['c3', 'CC', 'p2', '333']]))
+    pid, status, _ = make_plan(db)
+    assert status == 'ready'
+    apply(db, pid)
+    return db, pid
+
+
+def _target(db, table, old_key):
+    con = connect(db)
+    new_key = con.execute('SELECT new_key FROM identity_map WHERE table_name=? AND old_key=?', (table, old_key)).fetchone()[0]
+    row = con.execute('SELECT payload FROM target_row WHERE table_name=? AND new_key=?', (table, new_key)).fetchone()
+    return new_key, json.loads(row['payload']) if row else None
+
+
+def _update_target(db, table, old_key, changes):
+    new_key, payload = _target(db, table, old_key)
+    payload.update(changes)
+    con = connect(db)
+    with con:
+        con.execute('UPDATE target_row SET payload=? WHERE table_name=? AND new_key=?',
+                    (json.dumps(payload, sort_keys=True), table, new_key))
+
+
+def _assert_value_gone(db, value):
+    con = connect(db)
+    for (table,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+        for row in con.execute('SELECT * FROM ' + table):
+            assert value not in str(tuple(row)), table
+
+
+def _correction(tmp_path, name, rows):
+    file = tmp_path / name
+    file.write_text(json.dumps(rows), encoding='utf-8')
+    return file
+
+
+def test_erasure_stales_prepared_batch_and_scrubs_ledger(tmp_path):
+    db, pid = erasure_db(tmp_path)
+    batch = import_corrections(db, pid, _correction(tmp_path, 'corr.json', [
+        {'table': 'parent', 'old_key': 'p1', 'expected_revision': 0,
+         'after': {'id': 'p1', 'code': 'A', 'email': 'p1@example.test', 'region': 'north', 'label': 'L'}}]))
+    assert prepare_corrections(db, batch)[0][1] == 'ready'
+    erase(db, 'parent', 'p1', 'field_only', ['email'], 'req-stale-batch')
+    con = connect(db)
+    assert con.execute('SELECT status FROM correction_batch WHERE id=?', (batch,)).fetchone()[0] == 'stale'
+    with pytest.raises(ValueError, match='batch_not_received'):
+        prepare_corrections(db, batch)
+    with pytest.raises(ValueError, match='batch_not_prepared'):
+        apply_corrections(db, batch)
+    item = con.execute('SELECT after_source,desired_target,merged_target FROM correction_item WHERE batch_id=?', (batch,)).fetchone()
+    for column in item:
+        assert 'email' not in json.loads(column)
+    raw = con.execute('SELECT raw FROM correction_batch WHERE id=?', (batch,)).fetchone()[0]
+    assert b'p1@example.test' not in bytes(raw)
+    _assert_value_gone(db, 'p1@example.test')
+
+
+def test_erasure_scrubs_head_and_removes_conflicts(tmp_path):
+    db, pid = erasure_db(tmp_path)
+    first = import_corrections(db, pid, _correction(tmp_path, 'first.json', [
+        {'table': 'parent', 'old_key': 'p1', 'expected_revision': 0,
+         'after': {'id': 'p1', 'code': 'A', 'email': 'p1@example.test', 'region': 'north', 'label': 'L'}}]))
+    prepare_corrections(db, first)
+    assert apply_corrections(db, first) == 'applied'
+    _update_target(db, 'parent', 'p1', {'email': 'other@x.test'})
+    second = import_corrections(db, pid, _correction(tmp_path, 'second.json', [
+        {'table': 'parent', 'old_key': 'p1', 'expected_revision': 1,
+         'after': {'id': 'p1', 'code': 'A', 'email': 'new@y.test', 'region': 'north', 'label': 'L2'}}]))
+    assert prepare_corrections(db, second)[0][1:] == ('conflict', 'field_conflict')
+    con = connect(db)
+    assert con.execute("SELECT COUNT(*) FROM correction_conflict WHERE field='email'").fetchone()[0] == 1
+    erase(db, 'parent', 'p1', 'field_only', ['email'], 'req-conflict-1')
+    con = connect(db)
+    assert con.execute('SELECT COUNT(*) FROM correction_conflict').fetchone()[0] == 0
+    head = con.execute("SELECT revision,source_payload,projected_payload,target_payload FROM correction_head WHERE table_name='parent' AND old_key='p1'").fetchone()
+    assert head['revision'] == 1
+    for column in ('source_payload', 'projected_payload', 'target_payload'):
+        assert 'email' not in json.loads(head[column])
+    assert con.execute('SELECT status FROM correction_batch WHERE id=?', (first,)).fetchone()[0] == 'applied'
+    assert con.execute('SELECT status FROM correction_batch WHERE id=?', (second,)).fetchone()[0] == 'stale'
+    _assert_value_gone(db, 'p1@example.test')
+    _assert_value_gone(db, 'other@x.test')
+    _assert_value_gone(db, 'new@y.test')
+
+
+def test_correction_reintroducing_erased_field_is_blocked(tmp_path):
+    db, pid = erasure_db(tmp_path)
+    erase(db, 'parent', 'p1', 'field_only', ['email'], 'req-cblock-1')
+    # the sealed plan rejects any new correction batch
+    with pytest.raises(ValueError, match='migration_not_applied'):
+        import_corrections(db, pid, _correction(tmp_path, 'sealed.json', [
+            {'table': 'parent', 'old_key': 'p2', 'expected_revision': 0,
+             'after': {'id': 'p2', 'code': 'B', 'email': 'p2@example.test'}}]))
+    # rebuilding and applying a fresh plan does not bypass the erasure guard
+    pid2, status, _ = make_plan(db)
+    assert status == 'ready'
+    apply(db, pid2)
+    with pytest.raises(ValueError, match='erased_field_reimport'):
+        import_corrections(db, pid2, _correction(tmp_path, 'bad.json', [
+            {'table': 'parent', 'old_key': 'p1', 'expected_revision': 0,
+             'after': {'id': 'p1', 'code': 'A', 'email': 'x@y.test'}}]))
+    assert connect(db).execute('SELECT COUNT(*) FROM correction_batch').fetchone()[0] == 0
+    # a correction that does not re-introduce the erased field still applies
+    batch = import_corrections(db, pid2, _correction(tmp_path, 'ok.json', [
+        {'table': 'parent', 'old_key': 'p1', 'expected_revision': 0,
+         'after': {'id': 'p1', 'code': 'A', 'region': 'north', 'label': 'L'}}]))
+    assert prepare_corrections(db, batch)[0][1] == 'ready'
+    assert apply_corrections(db, batch) == 'applied'
+    _, payload = _target(db, 'parent', 'p1')
+    assert payload['label'] == 'L' and 'email' not in payload
+
+
+def test_correction_for_erased_entity_is_blocked(tmp_path):
+    db, pid = erasure_db(tmp_path)
+    erase(db, 'parent', 'p1', 'entity_closure', ['email'], 'req-cblock-2')
+    pid2, status, _ = make_plan(db)
+    assert status == 'ready'
+    apply(db, pid2)
+    with pytest.raises(ValueError, match='erased_entity_reimport'):
+        import_corrections(db, pid2, _correction(tmp_path, 'bad.json', [
+            {'table': 'parent', 'old_key': 'p1', 'expected_revision': 0, 'after': {'id': 'p1', 'code': 'A'}}]))
+    with pytest.raises(ValueError, match='erased_entity_reimport'):
+        import_corrections(db, pid2, _correction(tmp_path, 'child.json', [
+            {'table': 'child', 'old_key': 'c1', 'expected_revision': 0,
+             'after': {'id': 'c1', 'code': 'CA', 'parent_id': 'p2'}}]))
+    assert connect(db).execute('SELECT COUNT(*) FROM correction_batch').fetchone()[0] == 0
+
+
+def test_erasure_invalidates_prior_retirement_gate(tmp_path):
+    db, pid = erasure_db(tmp_path)
+    clients = tmp_path / 'clients.json'
+    clients.write_text(json.dumps([{'id': 'catalog', 'critical': True, 'table': 'parent'}]), encoding='utf-8')
+    configure_clients(db, clients)
+    for sequence, old_key in enumerate(('p1', 'p2'), 1):
+        new_key, payload = _target(db, 'parent', old_key)
+        observe_lookup(db, 'catalog', pid, sequence, old_key, new_key, _hash(payload))
+    audit, status, _ = audit_target(db, pid)
+    assert status == 'complete'
+    gate, decision, _ = retirement_decision(db, audit)
+    assert decision == 'retire_old_keys'
+    erase(db, 'parent', 'p1', 'field_only', ['email'], 'req-retire-1')
+    con = connect(db)
+    assert con.execute('SELECT status FROM retirement_gate WHERE id=?', (gate,)).fetchone()[0] == 'stale'
+    # the old audit conclusion can no longer retire keys, and neither can a new one
+    assert retirement_decision(db, audit)[1] == 'retain_aliases'
+    new_audit, new_status, _ = audit_target(db, pid)
+    assert new_status == 'sealed'
+    assert retirement_decision(db, new_audit)[1] == 'retain_aliases'
