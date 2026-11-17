@@ -12,6 +12,8 @@ from .auth_report import report as authorization_report
 from .archive import register_contract,import_candidates,plan_archive,import_replica,audit_archive,archive_report
 from .shards import create_manifest,ingest_shard,restore,shard_report
 from .quality import register_contract as quality_contract,import_batch as quality_import,evaluate as quality_evaluate,propose_repair as quality_propose,review_repair as quality_review,release as quality_release,quality_report
+from .credit import register_contract as credit_contract,issue_note,review_note,revoke_note
+from .credit_effect import decide_credit,apply_credit,fulfill_refund,audit_credit,credit_report
 from .settlement import import_file as settlement_import,evaluate as settlement_evaluate,report as settlement_report
 from .store import connect
 from .cutover import _hash
@@ -107,6 +109,11 @@ def main():
     qr=s.add_parser('quality-review');qr.add_argument('--db',required=True);qr.add_argument('--proposal',required=True);qr.add_argument('--reviewer',required=True);qr.add_argument('--decision',choices=['approve','reject'],required=True);qr.add_argument('--reason',required=True)
     ql=s.add_parser('quality-release');ql.add_argument('--db',required=True);ql.add_argument('--batch',type=int,required=True);ql.add_argument('--out')
     qrp=s.add_parser('quality-report');qrp.add_argument('--db',required=True)
+    for name in ('credit-contract','credit-note','credit-review','credit-apply','credit-refund','credit-revoke'):
+        command=s.add_parser(name);command.add_argument('file');command.add_argument('--db',required=True)
+    cd=s.add_parser('credit-decide');cd.add_argument('--db',required=True);cd.add_argument('--note',required=True);cd.add_argument('--as-of',required=True)
+    cau=s.add_parser('credit-audit');cau.add_argument('--db',required=True);cau.add_argument('--note',required=True);cau.add_argument('--as-of',required=True)
+    crep=s.add_parser('credit-report');crep.add_argument('--db',required=True);crep.add_argument('--note',required=True)
     se=s.add_parser('settlement-import');se.add_argument('file');se.add_argument('--db',required=True)
     sv=s.add_parser('settlement-evaluate');sv.add_argument('--db',required=True)
     srp=s.add_parser('settlement-report');srp.add_argument('--db',required=True)
@@ -152,6 +159,15 @@ def main():
     elif x.cmd=='quality-review':print(json.dumps(quality_review(x.db,x.proposal,x.reviewer,x.decision=='approve',x.reason),ensure_ascii=False,indent=2))
     elif x.cmd=='quality-release':print(json.dumps(quality_release(x.db,x.batch,x.out),ensure_ascii=False,indent=2))
     elif x.cmd=='quality-report':print(json.dumps(quality_report(x.db),ensure_ascii=False,indent=2))
+    elif x.cmd=='credit-contract':print(json.dumps(credit_contract(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='credit-note':print(json.dumps(issue_note(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='credit-review':print(json.dumps(review_note(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='credit-decide':print(json.dumps(decide_credit(x.db,x.note,x.as_of),ensure_ascii=False))
+    elif x.cmd=='credit-apply':print(json.dumps(apply_credit(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='credit-refund':print(json.dumps(fulfill_refund(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='credit-revoke':print(json.dumps(revoke_note(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='credit-audit':print(json.dumps(audit_credit(x.db,x.note,x.as_of),ensure_ascii=False))
+    elif x.cmd=='credit-report':print(json.dumps(credit_report(x.db,x.note),ensure_ascii=False,indent=2))
     elif x.cmd=='settlement-import':print(json.dumps(settlement_import(x.db,x.file),ensure_ascii=False,indent=2))
     elif x.cmd=='settlement-evaluate':print(json.dumps(settlement_evaluate(x.db),ensure_ascii=False,indent=2))
     elif x.cmd=='settlement-report':print(json.dumps(settlement_report(x.db),ensure_ascii=False,indent=2))

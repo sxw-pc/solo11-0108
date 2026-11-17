@@ -1,0 +1,1 @@
+{"contract_id":"credit-refund-a","party":"merchant-a","currency":"CNY","disposition":"refund","issuers":["support-a"],"approvers":["finance-a"],"refunders":["cashier-a"]}
