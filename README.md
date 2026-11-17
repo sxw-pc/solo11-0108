@@ -13,3 +13,5 @@
 旧键退役通过 `client-contract`、`lookup-observe` 和 `retirement-gate` 决定。关键客户端必须实际观察到映射后的新键及目标载荷哈希，且目标核对仍有效，才能得到 retire_old_keys；否则为 retain_aliases。合同、观测和每次闸门成员证据持久保存。`demo-decisions` 演示完整链路；测试覆盖目标漂移、缺失观测、错误映射与重复序号冲突。
 
 迁移完成后的旧源更正由独立的 `correction-import` → `correction-prepare` → `correction-apply` 流程处理。输入是 JSON 数组，每项提供 `table`、`old_key`、`expected_revision` 和完整的旧源 `after` 行。系统保存原始批次、每行更正版本、目标投影及逐字段冲突。更正外键先经冻结的旧新键映射转换；主键和自然键不允许借更正流程变更。准备时以旧源当前版本、目标现值和更正后投影做三方合并：目标独立改动的字段被保留，同字段竞争进入冲突隔离，其他行仍可落地。应用前再次核对版本和目标内容，避免准备后目标变化造成静默覆盖。`correction-report` 展示批次与冲突，`demo-corrections` 可运行完整样例。已落地的更正会成为后续 `target-audit` 的预期目标；旧审计因目标摘要变化失效，须重新审计并重新取得客户端观测后才可退役旧键。
+
+迁移后主体授权与凭证核验见 [建仓需求补充 v2](docs/BUILD_REQUIREMENTS_V2_AUTHORIZATION.md)。`auth-import` 把旧身份的授权/撤销版本入库，`access-check` 要求唯一键映射、已应用计划、当前完整目标审计和字段/用途授权；`credential-issue` 签发只存摘要的凭证，`credential-verify` 在撤销、目标更正或回滚后重新裁定。`auth-report` 输出证据但不输出 token，`demo-auth` 用合成数据演示允许→撤销的结果变化。真实认证和密钥托管不由本地模拟器承担。
