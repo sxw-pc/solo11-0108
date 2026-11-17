@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS archive_plan_item(plan_id INTEGER REFERENCES archive_
 CREATE TABLE IF NOT EXISTS archive_replica_proof(id TEXT PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),candidate_id TEXT REFERENCES archive_candidate(id),domain TEXT NOT NULL,digest TEXT NOT NULL,source_sha TEXT NOT NULL,raw BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS archive_audit(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),status TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS archive_audit_item(audit_id INTEGER REFERENCES archive_audit(id),candidate_id TEXT REFERENCES archive_candidate(id),status TEXT NOT NULL,domains TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(audit_id,candidate_id));
-CREATE TABLE IF NOT EXISTS shard_manifest(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),candidate_id TEXT REFERENCES archive_candidate(id),revision INTEGER NOT NULL,object_sha TEXT NOT NULL,object_size INTEGER NOT NULL,part0_sha TEXT NOT NULL,part1_sha TEXT NOT NULL,parity_sha TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(plan_id,candidate_id,revision));
-CREATE TABLE IF NOT EXISTS shard_proof(id TEXT PRIMARY KEY,manifest_id INTEGER REFERENCES shard_manifest(id),part_index INTEGER NOT NULL,domain TEXT NOT NULL,sha TEXT NOT NULL,raw BLOB NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS shard_manifest(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),candidate_id TEXT REFERENCES archive_candidate(id),revision INTEGER NOT NULL,object_sha TEXT NOT NULL,object_size INTEGER NOT NULL,part0_sha TEXT NOT NULL,part1_sha TEXT NOT NULL,parity_sha TEXT NOT NULL,codec_id TEXT,k INTEGER,n INTEGER,generator TEXT,shard_sha TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(plan_id,candidate_id,revision));
+CREATE TABLE IF NOT EXISTS shard_proof(id TEXT PRIMARY KEY,manifest_id INTEGER REFERENCES shard_manifest(id),revision INTEGER,part_index INTEGER NOT NULL,domain TEXT NOT NULL,sha TEXT NOT NULL,raw BLOB NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS shard_restore(id INTEGER PRIMARY KEY,manifest_id INTEGER REFERENCES shard_manifest(id),lost_domains TEXT NOT NULL,status TEXT NOT NULL,part_indexes TEXT NOT NULL,reconstructed_sha TEXT,reason TEXT NOT NULL,output_path TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS quality_contract(id TEXT PRIMARY KEY,table_name TEXT NOT NULL,identity_field TEXT NOT NULL,required_json TEXT NOT NULL,numeric_json TEXT NOT NULL,contract_sha TEXT NOT NULL,raw BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS quality_batch(id INTEGER PRIMARY KEY,contract_id TEXT NOT NULL REFERENCES quality_contract(id),source_sha TEXT UNIQUE NOT NULL,raw BLOB NOT NULL,status TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -42,4 +42,13 @@ CREATE TABLE IF NOT EXISTS quality_release(id INTEGER PRIMARY KEY,batch_id INTEG
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True)
-    db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA);return db
+    db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA)
+    # Databases created before the general shard codec keep the legacy three
+    # hash columns; add the frozen encoding columns in place so both layouts
+    # stay readable.
+    columns={row[1] for row in db.execute('PRAGMA table_info(shard_manifest)')}
+    for name,declaration in (('codec_id','TEXT'),('k','INTEGER'),('n','INTEGER'),('generator','TEXT'),('shard_sha','TEXT')):
+        if name not in columns:db.execute(f'ALTER TABLE shard_manifest ADD COLUMN {name} {declaration}')
+    proof_columns={row[1] for row in db.execute('PRAGMA table_info(shard_proof)')}
+    if 'revision' not in proof_columns:db.execute('ALTER TABLE shard_proof ADD COLUMN revision INTEGER')
+    return db

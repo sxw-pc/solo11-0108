@@ -18,7 +18,7 @@
 
 来源归档是独立工作流：`archive-contract`、`archive-candidates` 和 `archive-plan` 在法定保留、数据群覆盖与有限预算之间裁定哪些来源批次应留存；`archive-replica`、`archive-audit` 核实选中批次能否从不同保管域恢复。摘要冲突、域重复和候选版本变化分别产生争议、脆弱和旧计划失效结论，持久化记录可由 `archive-report` 查询。命令和反例见 [建仓需求补充 v3](docs/BUILD_REQUIREMENTS_V3_ARCHIVE.md)。
 
-真实离线分片恢复见 [建仓需求补充 v4](docs/BUILD_REQUIREMENTS_V4_SHARDS.md)：对保留对象的实际字节做 2-of-3 XOR 分片，按独立故障域失去分片的场景重建对象、核对整对象 SHA-256，并记录 manifest 版次、冲突分片及每次恢复审计。完整副本回执与分片字节验证并行保留，二者结论不混用。
+真实离线分片恢复见 [建仓需求补充 v4](docs/BUILD_REQUIREMENTS_V4_SHARDS.md)：对保留对象的实际字节做分片，按独立故障域失去分片的场景重建对象、核对整对象 SHA-256，并记录 manifest 版次、冲突分片及每次恢复审计。支持旧版 2-of-3 XOR 与系统化 MDS k-of-n（manifest 冻结 codec/k/n、GF(256) 生成矩阵与全部分片摘要，恢复时校验所选 k 行满秩）。完整副本回执与分片字节验证并行保留，二者结论不混用。
 
 迁移前来源质量隔离、独立修复复核与整批放行见 [建仓需求补充 v5](docs/BUILD_REQUIREMENTS_V5_QUALITY.md)。这条链路保存原始来源、逐行隔离原因和修复审批证据；整批质量通过后才导出 CSV 与 manifest 摘要。它独立于迁移后的旧源更正流程。
 
