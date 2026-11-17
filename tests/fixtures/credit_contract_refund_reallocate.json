@@ -1,0 +1,1 @@
+{"contract_id":"credit-refund-reallocate","party":"merchant-a","currency":"CNY","disposition":"refund","settlement_change_policy":"reallocate_unspent","issuers":["support-a"],"approvers":["finance-a"],"refunders":["cashier-a"]}

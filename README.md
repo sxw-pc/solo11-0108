@@ -24,4 +24,4 @@
 
 多源回款对账与结算账本见 [建仓需求补充 v6](docs/BUILD_REQUIREMENTS_V6_SETTLEMENT.md)。`settlement-import` 保存账单、银行回款、分配凭证和迟到冲正，`settlement-evaluate` 重算当前版本，`settlement-report` 查询历史及分配边；`demo-settlement` 展示一笔回款拆给两笔应收、两笔回款共同覆盖同一应收。金额使用整数分；同额多解、跨主体错配和归属不明的拆分冲正进入争议。
 
-客户贷项是另一类经济义务，见 [建仓需求补充 v7](docs/BUILD_REQUIREMENTS_V7_CREDIT.md)：独立审批后先抵扣未付应收，已付部分按签约合同形成退款义务或可用于未来发票的客户余额；应用、履行、过期、撤销和迟到冲正争议均留在贷项账本，不改写旧银行结算。
+客户贷项是另一类经济义务，见 [建仓需求补充 v7](docs/BUILD_REQUIREMENTS_V7_CREDIT.md)：独立审批后先抵扣未付应收，已付部分按签约合同形成退款义务或可用于未来发票的客户余额；应用、履行、过期、撤销和迟到冲正争议均留在贷项账本，不改写旧银行结算。合同可声明 `settlement_change_policy`：`freeze_review` 在新结算版本改变原发票后将贷项冻结为 `disputed_settlement`，`reallocate_unspent` 则只把尚未发生经济效果的余额按新版本重算并优先抵回当前原发票欠款；每次重裁都是绑定旧 `credit_decision`、旧/新 `settlement_run` 和合同摘要的追加记录，旧应用/退款与旧审计不被改写。

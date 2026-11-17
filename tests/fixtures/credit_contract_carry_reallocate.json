@@ -1,0 +1,1 @@
+{"contract_id":"credit-carry-reallocate","party":"merchant-a","currency":"CNY","disposition":"carry","settlement_change_policy":"reallocate_unspent","issuers":["support-a"],"approvers":["finance-a"],"refunders":["cashier-a"]}

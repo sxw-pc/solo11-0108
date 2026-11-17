@@ -34,11 +34,16 @@ def _roles(value, name):
         raise ValueError(f'invalid {name} roles')
 
 
+SETTLEMENT_CHANGE_POLICIES = ('freeze_review', 'reallocate_unspent')
+
+
 def register_contract(db_path, path):
     item, raw, sha = _read(path)
     ident, party, currency, disposition = (str(item[key]) for key in
                                            ('contract_id', 'party', 'currency', 'disposition'))
-    if not all((ident, party, currency)) or disposition not in ('carry', 'refund'):
+    policy = str(item.get('settlement_change_policy', 'freeze_review'))
+    if (not all((ident, party, currency)) or disposition not in ('carry', 'refund') or
+            policy not in SETTLEMENT_CHANGE_POLICIES):
         raise ValueError('invalid credit contract')
     for role in ('issuers', 'approvers', 'refunders'):
         _roles(item[role], role)
@@ -49,10 +54,11 @@ def register_contract(db_path, path):
             if old['source_sha'] != sha:
                 raise ValueError('credit contract id reused with changed terms')
             return {'contract_id': ident, 'idempotent': True}
-        db.execute('INSERT INTO credit_contract VALUES(?,?,?,?,?,?,?,?,?)',
-                   (ident, party, currency, disposition, json.dumps(item['issuers']),
+        db.execute('INSERT INTO credit_contract VALUES(?,?,?,?,?,?,?,?,?,?)',
+                   (ident, party, currency, disposition, policy, json.dumps(item['issuers']),
                     json.dumps(item['approvers']), json.dumps(item['refunders']), sha, raw))
-    return {'contract_id': ident, 'party': party, 'currency': currency, 'disposition': disposition}
+    return {'contract_id': ident, 'party': party, 'currency': currency,
+            'disposition': disposition, 'settlement_change_policy': policy}
 
 
 def issue_note(db_path, path):
@@ -146,8 +152,12 @@ def revoke_note(db_path, path):
                               (note['contract_id'],)).fetchone()
         if actor not in json.loads(contract['approvers_json']):
             raise ValueError('revocation requires authorized credit reviewer')
-        decision = db.execute('SELECT offset_cents FROM credit_decision WHERE note_id=?', (note_id,)).fetchone()
-        used = ((decision and decision['offset_cents'] > 0) or
+        decision = db.execute('SELECT * FROM credit_decision WHERE note_id=?', (note_id,)).fetchone()
+        latest = db.execute('SELECT total_offset_cents FROM credit_readjudication WHERE note_id=? '
+                            'ORDER BY id DESC LIMIT 1', (note_id,)).fetchone()
+        total_offset = (latest['total_offset_cents'] if latest else
+                        decision['offset_cents'] if decision else 0)
+        used = (total_offset > 0 or
                 db.execute('SELECT 1 FROM credit_application WHERE note_id=?', (note_id,)).fetchone() or
                 db.execute('SELECT 1 FROM credit_refund WHERE note_id=?', (note_id,)).fetchone())
         status = 'disputed' if used else 'accepted'
