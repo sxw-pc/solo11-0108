@@ -1,0 +1,6 @@
+[
+  {"id":"A","contract":"archive-2026q4","cohort":"north","units":2,"value":1,"digest":"sha-A","legal_hold":true},
+  {"id":"B","contract":"archive-2026q4","cohort":"north","units":2,"value":5,"digest":"sha-B","legal_hold":false},
+  {"id":"C","contract":"archive-2026q4","cohort":"south","units":2,"value":4,"digest":"sha-C","legal_hold":false},
+  {"id":"D","contract":"archive-2026q4","cohort":"south","units":3,"value":8,"digest":"sha-D","legal_hold":false}
+]

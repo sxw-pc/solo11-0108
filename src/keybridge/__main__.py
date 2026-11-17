@@ -9,6 +9,7 @@ from .corrections import import_corrections,prepare_corrections,apply_correction
 from .authorization import import_grants,check_access
 from .access_tokens import issue as issue_credential,verify as verify_credential
 from .auth_report import report as authorization_report
+from .archive import register_contract,import_candidates,plan_archive,import_replica,audit_archive,archive_report
 from .store import connect
 from .cutover import _hash
 def demo(workdir=None):
@@ -87,6 +88,11 @@ def main():
     ce=s.add_parser('credential-issue');ce.add_argument('--db',required=True);ce.add_argument('--id',required=True);ce.add_argument('--request',required=True);ce.add_argument('--issued',required=True);ce.add_argument('--expires',required=True)
     cv=s.add_parser('credential-verify');cv.add_argument('--db',required=True);cv.add_argument('--id',required=True);cv.add_argument('--token',required=True);cv.add_argument('--at',required=True)
     ar=s.add_parser('auth-report');ar.add_argument('--db',required=True);ar.add_argument('--out')
+    for name in ('archive-contract','archive-candidates','archive-replica'):
+        command=s.add_parser(name);command.add_argument('file');command.add_argument('--db',required=True)
+    ap=s.add_parser('archive-plan');ap.add_argument('--db',required=True);ap.add_argument('--contract',required=True)
+    aa=s.add_parser('archive-audit');aa.add_argument('--db',required=True);aa.add_argument('--plan',type=int,required=True)
+    arpt=s.add_parser('archive-report');arpt.add_argument('--db',required=True)
     x=p.parse_args()
     if x.cmd=='demo':print(demo(x.workdir))
     elif x.cmd=='demo-decisions':print(decision_demo(x.workdir))
@@ -111,5 +117,11 @@ def main():
     elif x.cmd=='credential-issue':print(issue_credential(x.db,x.id,x.request,x.issued,x.expires))
     elif x.cmd=='credential-verify':print(verify_credential(x.db,x.id,x.token,x.at))
     elif x.cmd=='auth-report':print(json.dumps(authorization_report(x.db,x.out),ensure_ascii=False,indent=2))
+    elif x.cmd=='archive-contract':print(register_contract(x.db,x.file))
+    elif x.cmd=='archive-candidates':print(import_candidates(x.db,x.file))
+    elif x.cmd=='archive-plan':print(plan_archive(x.db,x.contract))
+    elif x.cmd=='archive-replica':print(import_replica(x.db,x.file))
+    elif x.cmd=='archive-audit':print(audit_archive(x.db,x.plan))
+    elif x.cmd=='archive-report':print(json.dumps(archive_report(x.db),ensure_ascii=False,indent=2))
     else:print(write(x.db,x.plan,x.out))
 if __name__=='__main__':main()

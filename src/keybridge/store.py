@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS correction_batch(id INTEGER PRIMARY KEY,plan_id INTEG
 CREATE TABLE IF NOT EXISTS correction_item(id INTEGER PRIMARY KEY,batch_id INTEGER REFERENCES correction_batch(id),table_name TEXT NOT NULL,old_key TEXT NOT NULL,expected_revision INTEGER NOT NULL,after_source TEXT NOT NULL,status TEXT NOT NULL,reason TEXT,base_sha TEXT,target_sha TEXT,desired_target TEXT,merged_target TEXT,UNIQUE(batch_id,table_name,old_key));
 CREATE TABLE IF NOT EXISTS correction_head(table_name TEXT,old_key TEXT,revision INTEGER NOT NULL,source_payload TEXT NOT NULL,projected_payload TEXT NOT NULL,target_payload TEXT NOT NULL,updated_by INTEGER REFERENCES correction_item(id),PRIMARY KEY(table_name,old_key));
 CREATE TABLE IF NOT EXISTS correction_conflict(item_id INTEGER REFERENCES correction_item(id),field TEXT,base TEXT,target TEXT,requested TEXT,PRIMARY KEY(item_id,field));
+CREATE TABLE IF NOT EXISTS archive_contract(id TEXT PRIMARY KEY,budget INTEGER NOT NULL,min_per_cohort INTEGER NOT NULL,replica_quorum INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS archive_candidate(id TEXT PRIMARY KEY,contract_id TEXT REFERENCES archive_contract(id),cohort TEXT NOT NULL,units INTEGER NOT NULL,value INTEGER NOT NULL,digest TEXT NOT NULL,legal_hold INTEGER NOT NULL,source_sha TEXT NOT NULL,raw BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS archive_plan(id INTEGER PRIMARY KEY,contract_id TEXT REFERENCES archive_contract(id),revision INTEGER NOT NULL,status TEXT NOT NULL,used_units INTEGER NOT NULL,total_value INTEGER NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS archive_plan_item(plan_id INTEGER REFERENCES archive_plan(id),candidate_id TEXT REFERENCES archive_candidate(id),decision TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(plan_id,candidate_id));
+CREATE TABLE IF NOT EXISTS archive_replica_proof(id TEXT PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),candidate_id TEXT REFERENCES archive_candidate(id),domain TEXT NOT NULL,digest TEXT NOT NULL,source_sha TEXT NOT NULL,raw BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS archive_audit(id INTEGER PRIMARY KEY,plan_id INTEGER REFERENCES archive_plan(id),status TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS archive_audit_item(audit_id INTEGER REFERENCES archive_audit(id),candidate_id TEXT REFERENCES archive_candidate(id),status TEXT NOT NULL,domains TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(audit_id,candidate_id));
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True)
