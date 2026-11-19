@@ -15,6 +15,7 @@ from .quality import register_contract as quality_contract,import_batch as quali
 from .credit import register_contract as credit_contract,issue_note,review_note,revoke_note
 from .credit_effect import decide_credit,apply_credit,fulfill_refund,audit_credit,credit_report
 from .settlement import import_file as settlement_import,evaluate as settlement_evaluate,report as settlement_report
+from .feature_pipeline import register_contract as feature_contract,import_observations as feature_import,import_labels as feature_labels,build_training as feature_train,import_capture as feature_capture,check_parity as feature_parity,release as feature_release,report as feature_report
 from .store import connect
 from .cutover import _hash
 def demo(workdir=None):
@@ -118,6 +119,12 @@ def main():
     sv=s.add_parser('settlement-evaluate');sv.add_argument('--db',required=True)
     srp=s.add_parser('settlement-report');srp.add_argument('--db',required=True)
     sd=s.add_parser('demo-settlement');sd.add_argument('--workdir')
+    for name in ('feature-contract','feature-import','feature-labels','feature-capture'):
+        command=s.add_parser(name);command.add_argument('file');command.add_argument('--db',required=True)
+    ft=s.add_parser('feature-train');ft.add_argument('--db',required=True);ft.add_argument('--contract',required=True);ft.add_argument('--freeze-at',required=True)
+    fp=s.add_parser('feature-parity');fp.add_argument('--db',required=True);fp.add_argument('--build',type=int,required=True);fp.add_argument('--capture',required=True)
+    fr=s.add_parser('feature-release');fr.add_argument('--db',required=True);fr.add_argument('--build',type=int,required=True);fr.add_argument('--parity',type=int,required=True)
+    frep=s.add_parser('feature-report');frep.add_argument('--db',required=True);frep.add_argument('--build',type=int,required=True)
     x=p.parse_args()
     if x.cmd=='demo':print(demo(x.workdir))
     elif x.cmd=='demo-decisions':print(decision_demo(x.workdir))
@@ -176,5 +183,13 @@ def main():
         db=root/'settlement.sqlite';fixture=Path(__file__).resolve().parent.parent.parent/'tests'/'fixtures'/'settlement_ok.json'
         settlement_import(db,fixture)
         print(json.dumps({'db':str(db),'report':settlement_report(db)},ensure_ascii=False,indent=2))
+    elif x.cmd=='feature-contract':print(json.dumps(feature_contract(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='feature-import':print(json.dumps(feature_import(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='feature-labels':print(json.dumps(feature_labels(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='feature-capture':print(json.dumps(feature_capture(x.db,x.file),ensure_ascii=False))
+    elif x.cmd=='feature-train':print(json.dumps(feature_train(x.db,x.contract,x.freeze_at),ensure_ascii=False))
+    elif x.cmd=='feature-parity':print(json.dumps(feature_parity(x.db,x.build,x.capture),ensure_ascii=False))
+    elif x.cmd=='feature-release':print(json.dumps(feature_release(x.db,x.build,x.parity),ensure_ascii=False))
+    elif x.cmd=='feature-report':print(json.dumps(feature_report(x.db,x.build),ensure_ascii=False,indent=2))
     else:print(write(x.db,x.plan,x.out))
 if __name__=='__main__':main()

@@ -1,0 +1,1 @@
+{"capture_id":"online-1","contract_id":"risk-v1","prediction_at":"2026-11-01T10:00:00Z","values":[{"entity_id":"A","feature_name":"balance","value":100,"observation_id":"bal-A","revision":1},{"entity_id":"A","feature_name":"orders","value":4,"observation_id":"ord-A","revision":1}]}

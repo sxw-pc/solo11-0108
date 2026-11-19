@@ -1,0 +1,1 @@
+{"labels":[{"label_id":"la","entity_id":"A","prediction_at":"2026-11-01T10:00:00Z","outcome_at":"2026-11-02T10:00:00Z","known_at":"2026-11-02T11:00:00Z","outcome":1},{"label_id":"lb","entity_id":"B","prediction_at":"2026-11-01T10:00:00Z","outcome_at":"2026-11-02T10:00:00Z","known_at":"2026-11-02T11:00:00Z","outcome":0}]}

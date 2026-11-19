@@ -1,0 +1,1 @@
+{"id":"risk-v1","min_eligible":1,"features":[{"name":"balance","ttl_hours":48,"required":true},{"name":"orders","ttl_hours":72,"required":true}]}
